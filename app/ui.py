@@ -6,7 +6,7 @@ import re
 from nicegui import ui, app
 import httpx
 
-API_BASE = f"http://localhost:{os.getenv('APP_PORT', '7030')}"
+API_BASE = f"http://localhost:{os.getenv('APP_PORT', '8080')}"
 
 
 def _bold_to_html(text: str) -> str:
@@ -26,6 +26,26 @@ def _parse_transcript(raw: str) -> list[dict]:
         return json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return [{"start": 0, "text": raw}]
+
+
+def _translation_progress(item: dict) -> tuple[int, int]:
+    """Return (translated_count, total_paragraphs) from transcript/transcript_ko."""
+    transcript = item.get("transcript")
+    transcript_ko = item.get("transcript_ko")
+    if not transcript:
+        return 0, 0
+    try:
+        entries = json.loads(transcript)
+    except (json.JSONDecodeError, TypeError):
+        return 0, 0
+    total = len(_merge_into_paragraphs(entries, interval=30))
+    done = 0
+    if transcript_ko:
+        try:
+            done = len(json.loads(transcript_ko))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return done, total
 
 
 def _merge_into_paragraphs(entries: list[dict], interval: int = 30) -> list[dict]:
@@ -123,7 +143,7 @@ def setup_ui():
                 items = r.json() if r.status_code == 200 else []
 
                 # Only re-render if data changed
-                data_key = json.dumps([(i.get("id"), i.get("status"), i.get("summary_short", "")[:20]) for i in items])
+                data_key = json.dumps([(i.get("id"), i.get("status"), (i.get("summary_short") or "")[:20], len(i.get("transcript_ko") or "")) for i in items])
                 if data_key == _last_data[0]:
                     return
                 _last_data[0] = data_key
@@ -166,29 +186,37 @@ def setup_ui():
                     ui.label(data.get("title") or "처리 중...").classes("text-2xl font-bold")
                     duration = data.get("duration_seconds") or 0
                     with ui.row().classes("gap-4 text-sm opacity-70 items-center"):
+                        if data.get("url"):
+                            ui.button("▶ YouTube", on_click=lambda: ui.run_javascript(f'window.open("{data["url"]}", "_blank")')).props("outline color=red size=sm").classes("py-0")
                         if data.get("channel"):
                             ui.label(f"📺 {data['channel']}")
                         if duration:
                             ui.label(f"⏱ {duration // 60}분 {duration % 60}초")
-                        if status in ("completed", "failed"):
-                            ui.button("▶ YouTube", on_click=lambda: ui.run_javascript(f'window.open("{data["url"]}", "_blank")')).props("outline color=red size=sm").classes("py-0")
-                            _status_badge(status)
-                            ui.space()
-                            async def regenerate():
-                                with ui.dialog() as dialog, ui.card():
-                                    ui.label("다시 생성하시겠습니까?").classes("text-base")
-                                    ui.label("transcript와 번역/요약을 다시 수행합니다.").classes("text-sm opacity-70")
-                                    with ui.row().classes("w-full justify-end gap-2 mt-2"):
-                                        ui.button("취소", on_click=dialog.close).props("flat")
-                                        async def confirm():
-                                            dialog.close()
-                                            async with httpx.AsyncClient() as c2:
-                                                await c2.delete(f"{API_BASE}/api/analyses/{analysis_id}")
-                                                await c2.post(f"{API_BASE}/api/analyze", json={"url": data["url"]})
-                                            ui.navigate.to("/")
-                                        ui.button("확인", on_click=confirm, color="primary")
-                                dialog.open()
-                            ui.button("다시 생성", on_click=regenerate, color="orange").props("outline size=sm")
+                        _status_badge(status)
+                        ui.space()
+                        if status != "completed":
+                            async def stop_analysis():
+                                async with httpx.AsyncClient() as c2:
+                                    await c2.post(f"{API_BASE}/api/analyses/{analysis_id}/stop")
+                                ui.notify("중단됨", type="warning")
+                                await load_detail()
+                            ui.button("Stop", on_click=stop_analysis, color="red").props("outline size=sm")
+                        async def regenerate():
+                            with ui.dialog() as dialog, ui.card():
+                                ui.label("다시 생성하시겠습니까?").classes("text-base")
+                                ui.label("transcript와 번역/요약을 다시 수행합니다.").classes("text-sm opacity-70")
+                                with ui.row().classes("w-full justify-end gap-2 mt-2"):
+                                    ui.button("취소", on_click=dialog.close).props("flat")
+                                    async def confirm():
+                                        dialog.close()
+                                        async with httpx.AsyncClient() as c2:
+                                            await c2.post(f"{API_BASE}/api/analyses/{analysis_id}/stop")
+                                            await c2.delete(f"{API_BASE}/api/analyses/{analysis_id}")
+                                            await c2.post(f"{API_BASE}/api/analyze", json={"url": data["url"]})
+                                        ui.navigate.to("/")
+                                    ui.button("확인", on_click=confirm, color="primary")
+                            dialog.open()
+                        ui.button("다시 생성", on_click=regenerate, color="orange").props("outline size=sm")
 
                     # Error
                     if data.get("error_message"):
@@ -196,7 +224,7 @@ def setup_ui():
 
                     # Step indicator (show when not completed)
                     if status not in ("completed", "failed"):
-                        _render_steps(status)
+                        _render_steps(status, data)
 
                     # Progressive rendering based on what's available
                     has_transcript = bool(data.get("transcript"))
@@ -210,7 +238,15 @@ def setup_ui():
                                 ui.label(data["summary_short"]).classes("text-base leading-relaxed")
                             if data.get("summary_structured"):
                                 ui.separator()
-                                ui.markdown(data["summary_structured"]).classes("text-base")
+                                ui.markdown(data["summary_structured"]).classes("text-base summary-md")
+                                ui.add_css("""
+                                    .summary-md h1, .summary-md h2, .summary-md h3 {
+                                        font-size: 1rem !important;
+                                        font-weight: 700 !important;
+                                        margin-top: 1em;
+                                        margin-bottom: 0.3em;
+                                    }
+                                """)
 
                     # 2. Transcript (show as soon as fetching is done)
                     if has_transcript:
@@ -248,27 +284,34 @@ def setup_ui():
             timer = ui.timer(3.0, poll)
 
 
-def _render_steps(current_status: str):
+def _render_steps(current_status: str, data: dict = None):
     """Render step indicator with completed/active/pending states."""
     active_idx = _step_index(current_status)
 
     with ui.row().classes("w-full gap-2 my-3 items-center"):
         for i, step in enumerate(STEPS):
+            # Build label with progress for translating step
+            label = step["label"]
+            if step["key"] == "translating" and i == active_idx and data:
+                done, total = _translation_progress(data)
+                if total:
+                    label = f"{step['label']} ({done}/{total})"
+
             if i < active_idx:
                 # Completed
                 with ui.row().classes("items-center gap-1 px-3 py-1 rounded-full bg-green-900"):
                     ui.label("✅").classes("text-sm")
-                    ui.label(step["label"]).classes("text-sm text-green-300")
+                    ui.label(label).classes("text-sm text-green-300")
             elif i == active_idx:
                 # Active
                 with ui.row().classes("items-center gap-1 px-3 py-1 rounded-full bg-blue-900"):
                     ui.spinner(size="sm")
-                    ui.label(step["label"]).classes("text-sm text-blue-300 font-bold")
+                    ui.label(label).classes("text-sm text-blue-300 font-bold")
             else:
                 # Pending
                 with ui.row().classes("items-center gap-1 px-3 py-1 rounded-full bg-gray-800"):
                     ui.label("⬜").classes("text-sm")
-                    ui.label(step["label"]).classes("text-sm text-gray-500")
+                    ui.label(label).classes("text-sm text-gray-500")
 
             # Arrow between steps
             if i < len(STEPS) - 1:
@@ -419,7 +462,12 @@ def _render_grid_card(item: dict):
                 status = item.get("status", "pending")
                 if status not in ("completed", "failed"):
                     step_labels = {"pending": "대기중", "fetching": "📥 추출중", "summarizing": "📝 요약중", "translating": "🌐 번역중"}
-                    ui.label(step_labels.get(status, "")).classes("text-xs opacity-70")
+                    label = step_labels.get(status, "")
+                    if status == "translating":
+                        done, total = _translation_progress(item)
+                        if total:
+                            label = f"🌐 번역 {done}/{total}"
+                    ui.label(label).classes("text-xs opacity-70")
             # Summary preview (4 lines max with tooltip)
             if item.get("summary_short"):
                 summary = item["summary_short"]

@@ -98,7 +98,11 @@ async def summarize(transcript_json: str) -> tuple[str, str]:
     prompt = (
         "다음 YouTube 영상 스크립트를 분석해서 두 가지 요약을 한국어로 만들어줘.\n\n"
         "1. **짧은 요약**: 3-5문장으로 핵심 내용 정리\n"
-        "2. **구조화 요약**: 주제별로 bullet point 형태로 정리 (마크다운)\n\n"
+        "2. **구조화 요약**: 주제별로 bullet point 형태로 정리\n\n"
+        "구조화 요약 규칙:\n"
+        "- 마크다운 헤딩(#, ##, ###)은 절대 사용하지 마\n"
+        "- 주제 제목은 **굵은 글씨**로 표시 (예: **주제명**)\n"
+        "- 하위 내용은 bullet point(- 또는 •)로 나열\n\n"
         "반드시 아래 형식으로 응답해:\n"
         "---SHORT---\n(짧은 요약)\n---STRUCTURED---\n(구조화 요약)\n\n"
         f"스크립트:\n{text}"

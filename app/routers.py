@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from app.models import AnalyzeRequest, AnalysisResponse
 from app.youtube import extract_video_id
 from app.db import create_analysis, get_analysis, get_by_video_id, list_analyses, delete_analysis
-from app.pipeline import start_pipeline
+from app.pipeline import start_pipeline, stop_pipeline
 
 router = APIRouter(prefix="/api")
 
@@ -43,4 +43,12 @@ async def delete(analysis_id: str):
     deleted = await delete_analysis(analysis_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
+@router.post("/analyses/{analysis_id}/stop")
+async def stop(analysis_id: str):
+    stopped = await stop_pipeline(analysis_id)
+    if not stopped:
+        raise HTTPException(status_code=400, detail="Not running")
     return {"ok": True}

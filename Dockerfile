@@ -16,6 +16,6 @@ COPY main.py .
 COPY app/ app/
 COPY .env .env
 
-EXPOSE 8080
+EXPOSE 7030
 
 CMD ["uv", "run", "main.py"]

@@ -19,6 +19,15 @@ def start_pipeline(analysis_id: str):
     task.add_done_callback(lambda t: _tasks.pop(analysis_id, None))
 
 
+async def stop_pipeline(analysis_id: str) -> bool:
+    task = _tasks.get(analysis_id)
+    if task and not task.done():
+        task.cancel()
+        await update_analysis(analysis_id, status="failed", error_message="Stopped by user")
+        return True
+    return False
+
+
 async def run_pipeline(analysis_id: str):
     try:
         await update_analysis(analysis_id, status="fetching")
