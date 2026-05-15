@@ -14,7 +14,6 @@ RUN uv sync --no-dev --frozen
 # Copy app code
 COPY main.py .
 COPY app/ app/
-COPY .env .env
 
 EXPOSE 7030
 

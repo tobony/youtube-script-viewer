@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from app.db import update_analysis, get_analysis
-from app.youtube import get_metadata, get_transcript
+from app.youtube import get_metadata, get_transcript_with_language
 
 logger = logging.getLogger(__name__)
 
@@ -109,16 +109,19 @@ async def run_pipeline(analysis_id: str):
             except Exception as e:
                 logger.warning(f"Summarize failed for {analysis_id}: {e}")
 
-            try:
-                await update_analysis(analysis_id, status="translating")
+            if row.get("transcript_lang") == "ko":
+                await update_analysis(analysis_id, transcript_ko=_copy_transcript_as_paragraphs(transcript))
+            else:
+                try:
+                    await update_analysis(analysis_id, status="translating")
 
-                async def on_translate_progress(ko_json: str):
-                    await update_analysis(analysis_id, transcript_ko=ko_json)
+                    async def on_translate_progress(ko_json: str):
+                        await update_analysis(analysis_id, transcript_ko=ko_json)
 
-                transcript_ko = await translate_paragraphs(transcript, on_progress=on_translate_progress)
-                await update_analysis(analysis_id, transcript_ko=transcript_ko)
-            except Exception as e:
-                logger.warning(f"Translate failed for {analysis_id}: {e}")
+                    transcript_ko = await translate_paragraphs(transcript, on_progress=on_translate_progress)
+                    await update_analysis(analysis_id, transcript_ko=transcript_ko)
+                except Exception as e:
+                    logger.warning(f"Translate failed for {analysis_id}: {e}")
 
         await update_analysis(analysis_id, status="completed")
         logger.info(f"Pipeline completed: {analysis_id}")
@@ -171,9 +174,10 @@ async def _stage_fetch(analysis_id: str) -> dict:
 
     metadata = await asyncio.to_thread(get_metadata, video_id)
     try:
-        transcript = await asyncio.to_thread(get_transcript, video_id)
+        transcript, transcript_lang = await asyncio.to_thread(get_transcript_with_language, video_id)
     except Exception:
         transcript = ""
+        transcript_lang = None
 
     row = await update_analysis(
         analysis_id,
@@ -184,5 +188,30 @@ async def _stage_fetch(analysis_id: str) -> dict:
         view_count=metadata["view_count"],
         like_count=metadata["like_count"],
         transcript=transcript,
+        transcript_lang=transcript_lang,
     )
     return row
+
+
+def _copy_transcript_as_paragraphs(transcript_json: str, interval: int = 30) -> str:
+    try:
+        entries = json.loads(transcript_json)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not entries:
+        return ""
+
+    paragraphs = []
+    current_start = entries[0]["start"]
+    current_texts = []
+    for entry in entries:
+        if (entry["start"] - current_start >= interval
+                and current_texts
+                and current_texts[-1].rstrip()[-1:] in ".?!"):
+            paragraphs.append({"start": current_start, "text": " ".join(current_texts)})
+            current_start = entry["start"]
+            current_texts = []
+        current_texts.append(entry["text"])
+    if current_texts:
+        paragraphs.append({"start": current_start, "text": " ".join(current_texts)})
+    return json.dumps(paragraphs, ensure_ascii=False)

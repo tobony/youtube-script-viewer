@@ -1,11 +1,10 @@
 """LLM service — Azure OpenAI (default) or kiro-gateway."""
 
-import asyncio
 import json
 import logging
 import os
 from dotenv import load_dotenv
-from openai import AsyncOpenAI, AsyncAzureOpenAI
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +23,109 @@ KIRO_BASE_URL = os.getenv("KIRO_BASE_URL", "http://localhost:4000/v1")
 KIRO_API_KEY = os.getenv("KIRO_API_KEY", "kiro-local")
 KIRO_MODEL = os.getenv("KIRO_MODEL", "claude-haiku-4-5")
 
+# OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+
+# OpenRouter
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-5.4-mini")
+
+PROVIDERS = {
+    "azure": "Azure OpenAI",
+    "kiro": "Kiro Gateway",
+    "openai": "OpenAI",
+    "openrouter": "OpenRouter",
+}
+
 
 def _get_client():
     if LLM_PROVIDER == "azure":
         return AsyncOpenAI(
-            base_url=AZURE_ENDPOINT,
+            base_url=_normalize_azure_base_url(AZURE_ENDPOINT),
             api_key=AZURE_API_KEY,
         ), AZURE_MODEL
-    else:
+    if LLM_PROVIDER == "kiro":
         return AsyncOpenAI(
             base_url=KIRO_BASE_URL,
             api_key=KIRO_API_KEY,
         ), KIRO_MODEL
+    if LLM_PROVIDER == "openai":
+        return AsyncOpenAI(api_key=OPENAI_API_KEY), OPENAI_MODEL
+    if LLM_PROVIDER == "openrouter":
+        return AsyncOpenAI(
+            base_url=OPENROUTER_BASE_URL,
+            api_key=OPENROUTER_API_KEY,
+        ), OPENROUTER_MODEL
+    raise ValueError(f"Unsupported LLM_PROVIDER: {LLM_PROVIDER}")
+
+
+def _normalize_azure_base_url(endpoint: str) -> str:
+    endpoint = endpoint.strip().rstrip("/")
+    if not endpoint:
+        return endpoint
+    if "services.ai.azure.com" in endpoint and not endpoint.endswith("/models"):
+        return f"{endpoint}/models"
+    if "openai.azure.com" in endpoint and "/openai/v1" not in endpoint:
+        return f"{endpoint}/openai/v1"
+    return endpoint
+
+
+def get_model(provider: str | None = None) -> str:
+    provider = provider or LLM_PROVIDER
+    if provider == "azure":
+        return AZURE_MODEL
+    if provider == "kiro":
+        return KIRO_MODEL
+    if provider == "openai":
+        return OPENAI_MODEL
+    if provider == "openrouter":
+        return OPENROUTER_MODEL
+    return ""
+
+
+def set_model(provider: str, model: str) -> None:
+    global AZURE_MODEL, KIRO_MODEL, OPENAI_MODEL, OPENROUTER_MODEL
+    if provider == "azure":
+        AZURE_MODEL = model
+    elif provider == "kiro":
+        KIRO_MODEL = model
+    elif provider == "openai":
+        OPENAI_MODEL = model
+    elif provider == "openrouter":
+        OPENROUTER_MODEL = model
+
+
+def has_api_key(provider: str | None = None) -> bool:
+    provider = provider or LLM_PROVIDER
+    if provider == "azure":
+        return bool(AZURE_API_KEY)
+    if provider == "kiro":
+        return bool(KIRO_API_KEY)
+    if provider == "openai":
+        return bool(OPENAI_API_KEY)
+    if provider == "openrouter":
+        return bool(OPENROUTER_API_KEY)
+    return False
+
+
+def set_api_key(provider: str, api_key: str) -> bool:
+    global AZURE_API_KEY, KIRO_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY
+    api_key = api_key.strip()
+    if not api_key:
+        return False
+    if provider == "azure":
+        AZURE_API_KEY = api_key
+    elif provider == "kiro":
+        KIRO_API_KEY = api_key
+    elif provider == "openai":
+        OPENAI_API_KEY = api_key
+    elif provider == "openrouter":
+        OPENROUTER_API_KEY = api_key
+    else:
+        return False
+    return True
 
 
 async def _chat(prompt: str, system: str = "") -> str:

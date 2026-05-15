@@ -5,6 +5,7 @@ import os
 import re
 from nicegui import ui, app
 import httpx
+from app.db import get_analysis, list_analyses
 
 API_BASE = f"http://localhost:{os.getenv('APP_PORT', '8080')}"
 
@@ -96,11 +97,61 @@ def setup_ui():
     async def main_page():
         dark = ui.dark_mode(False)
         layout_mode = {"value": "grid"}  # "list" or "grid"
+        from app import pipeline
+        from app import llm
 
         with ui.column().classes("w-full max-w-6xl mx-auto p-4 gap-4"):
             # Header row
             with ui.row().classes("w-full items-center"):
                 ui.label("YouTube Script Viewer").classes("text-3xl font-bold flex-grow")
+                with ui.button(icon="menu").props("flat round"):
+                    with ui.menu().classes("p-4"):
+                        with ui.column().classes("gap-3 w-72"):
+                            ui.label("Settings").classes("text-base font-bold")
+                            llm_switch = ui.switch("AI translate/summarize", value=pipeline.llm_enabled)
+                            llm_switch.on_value_change(lambda e: setattr(pipeline, "llm_enabled", e.value))
+
+                            model_input = ui.input(
+                                "Model",
+                                value=llm.get_model(llm.LLM_PROVIDER),
+                            ).props("dense outlined").classes("w-full")
+
+                            def update_provider(e):
+                                llm.LLM_PROVIDER = e.value
+                                model_input.set_value(llm.get_model(e.value))
+                                key_status.set_text(
+                                    "API key loaded" if llm.has_api_key(e.value) else "API key missing"
+                                )
+                                api_key_input.set_value("")
+
+                            ui.select(
+                                llm.PROVIDERS,
+                                label="Provider",
+                                value=llm.LLM_PROVIDER,
+                                on_change=update_provider,
+                            ).props("dense outlined").classes("w-full")
+
+                            model_input.on_value_change(
+                                lambda e: llm.set_model(llm.LLM_PROVIDER, e.value)
+                            )
+
+                            key_status = ui.label(
+                                "API key loaded" if llm.has_api_key(llm.LLM_PROVIDER) else "API key missing"
+                            ).classes("text-xs opacity-70")
+                            api_key_input = ui.input("API key").props(
+                                "dense outlined type=password autocomplete=off"
+                            ).classes("w-full")
+
+                            def apply_api_key():
+                                if llm.set_api_key(llm.LLM_PROVIDER, api_key_input.value or ""):
+                                    api_key_input.set_value("")
+                                    key_status.set_text("Runtime API key applied")
+                                    ui.notify("API key applied for this session", type="positive")
+                                else:
+                                    ui.notify("Enter a non-empty API key", type="warning")
+
+                            ui.button("Apply API key", on_click=apply_api_key).props("outline size=sm")
+                            ui.label("Runtime API keys are not saved. Restarting the app uses .env again.").classes("text-xs opacity-70")
                 ui.button(icon="light_mode", on_click=lambda: dark.set_value(not dark.value)).props("flat round")
                 ui.toggle({"list": "☰", "grid": "▦"}, value="grid",
                           on_change=lambda e: _set_layout(e.value)).props("dense")
@@ -109,16 +160,6 @@ def setup_ui():
                 ui.button("분석", on_click=lambda: submit(url_input)).classes("px-8")
                 url_input = ui.input(placeholder="YouTube URL을 입력하세요...").classes("flex-grow")
 
-            with ui.row().classes("w-full items-center gap-2"):
-                from app import pipeline
-                from app import llm
-                llm_switch = ui.switch("AI 번역/요약", value=pipeline.llm_enabled).classes("text-sm")
-                llm_switch.on_value_change(lambda e: setattr(pipeline, "llm_enabled", e.value))
-                ui.select(
-                    {"azure": "Azure OpenAI (gpt-5.4-nano)", "kiro": "Kiro Gateway (Claude Haiku 4.5)"},
-                    value=llm.LLM_PROVIDER,
-                    on_change=lambda e: setattr(llm, "LLM_PROVIDER", e.value),
-                ).classes("text-sm").props("dense")
 
             history_container = ui.element("div").classes("w-full")
 
@@ -144,9 +185,7 @@ def setup_ui():
             _last_data = [None]
 
             async def refresh_history():
-                async with httpx.AsyncClient() as c:
-                    r = await c.get(f"{API_BASE}/api/analyses?limit=50")
-                items = r.json() if r.status_code == 200 else []
+                items = await list_analyses(limit=50)
 
                 # Only re-render if data changed
                 data_key = json.dumps([(i.get("id"), i.get("status"), (i.get("summary_short") or "")[:20], len(i.get("transcript_ko") or "")) for i in items])
@@ -178,14 +217,12 @@ def setup_ui():
 
             async def load_detail():
                 content_area.clear()
-                async with httpx.AsyncClient() as c:
-                    r = await c.get(f"{API_BASE}/api/analyses/{analysis_id}")
-                if r.status_code != 200:
+                data = await get_analysis(analysis_id)
+                if not data:
                     with content_area:
                         ui.label("Not found").classes("text-red")
                     return
 
-                data = r.json()
                 status = data.get("status", "pending")
                 with content_area:
                     # Title
@@ -280,11 +317,9 @@ def setup_ui():
             _last_ko_len = [0]
 
             async def poll():
-                async with httpx.AsyncClient() as c:
-                    r = await c.get(f"{API_BASE}/api/analyses/{analysis_id}")
-                if r.status_code != 200:
+                data = await get_analysis(analysis_id)
+                if not data:
                     return
-                data = r.json()
                 status = data.get("status")
                 ko_len = len(data.get("transcript_ko") or "")
 

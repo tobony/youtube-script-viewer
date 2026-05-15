@@ -17,6 +17,7 @@ class AnalysisResponse(BaseModel):
     view_count: int = 0
     like_count: int = 0
     transcript: Optional[str] = None
+    transcript_lang: Optional[str] = None
     summary_short: Optional[str] = None
     summary_structured: Optional[str] = None
     transcript_ko: Optional[str] = None

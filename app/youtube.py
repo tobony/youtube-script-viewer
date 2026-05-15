@@ -35,19 +35,26 @@ def get_metadata(video_id: str) -> dict:
     }
 
 
-def get_transcript(video_id: str) -> str:
-    """Returns JSON string: [{"start": float, "text": str}, ...]"""
+def get_transcript_with_language(video_id: str) -> tuple[str, str | None]:
+    """Returns (transcript_json, language_code)."""
     ytt = YouTubeTranscriptApi()
     for lang in ["ko", "en"]:
         try:
             result = ytt.fetch(video_id, languages=[lang])
             entries = [{"start": s.start, "text": s.text} for s in result.snippets]
-            return json.dumps(entries, ensure_ascii=False)
+            return json.dumps(entries, ensure_ascii=False), lang
         except Exception:
             continue
     try:
         result = ytt.fetch(video_id)
         entries = [{"start": s.start, "text": s.text} for s in result.snippets]
-        return json.dumps(entries, ensure_ascii=False)
+        language_code = getattr(result, "language_code", None)
+        return json.dumps(entries, ensure_ascii=False), language_code
     except Exception:
-        return ""
+        return "", None
+
+
+def get_transcript(video_id: str) -> str:
+    """Returns JSON string: [{"start": float, "text": str}, ...]"""
+    transcript, _language = get_transcript_with_language(video_id)
+    return transcript
