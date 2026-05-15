@@ -1,31 +1,95 @@
-"""Async pipeline: fetch → summarize → translate."""
+"""Async pipeline: Queue-based sequential execution."""
 
 import asyncio
+import json
 import logging
-from app.db import update_analysis
+from app.db import update_analysis, get_analysis
 from app.youtube import get_metadata, get_transcript
 
 logger = logging.getLogger(__name__)
 
-_tasks: dict[str, asyncio.Task] = {}
-
 # Runtime toggle (controlled via UI)
 llm_enabled: bool = True
 
+# Queue + worker
+_queue: asyncio.Queue | None = None
+_worker_task: asyncio.Task | None = None
+_current_id: str | None = None
+_current_task: asyncio.Task | None = None
+
+
+def _ensure_worker():
+    global _queue, _worker_task
+    if _queue is None:
+        _queue = asyncio.Queue()
+    if _worker_task is None or _worker_task.done():
+        _worker_task = asyncio.create_task(_worker())
+
+
+async def _worker():
+    while True:
+        job_type, analysis_id = await _queue.get()
+        global _current_id, _current_task
+        _current_id = analysis_id
+        try:
+            if job_type == "full":
+                _current_task = asyncio.current_task()
+                await run_pipeline(analysis_id)
+            elif job_type == "resume_translate":
+                _current_task = asyncio.current_task()
+                await _resume_translate(analysis_id)
+        except asyncio.CancelledError:
+            await update_analysis(analysis_id, status="failed", error_message="Stopped by user")
+        except Exception as e:
+            logger.error(f"Worker error for {analysis_id}: {e}")
+        finally:
+            _current_id = None
+            _current_task = None
+            _queue.task_done()
+
 
 def start_pipeline(analysis_id: str):
-    task = asyncio.create_task(run_pipeline(analysis_id))
-    _tasks[analysis_id] = task
-    task.add_done_callback(lambda t: _tasks.pop(analysis_id, None))
+    _ensure_worker()
+    asyncio.ensure_future(_enqueue("full", analysis_id))
+
+
+def start_resume_translate(analysis_id: str):
+    _ensure_worker()
+    asyncio.ensure_future(_enqueue("resume_translate", analysis_id))
+
+
+async def _enqueue(job_type: str, analysis_id: str):
+    await update_analysis(analysis_id, status="waiting")
+    await _queue.put((job_type, analysis_id))
 
 
 async def stop_pipeline(analysis_id: str) -> bool:
-    task = _tasks.get(analysis_id)
-    if task and not task.done():
-        task.cancel()
+    # If currently running, cancel
+    if _current_id == analysis_id and _current_task and not _current_task.done():
+        _current_task.cancel()
         await update_analysis(analysis_id, status="failed", error_message="Stopped by user")
         return True
+    # If in queue, remove it
+    if _queue:
+        new_items = []
+        while not _queue.empty():
+            item = _queue.get_nowait()
+            if item[1] != analysis_id:
+                new_items.append(item)
+            else:
+                _queue.task_done()
+                asyncio.ensure_future(
+                    update_analysis(analysis_id, status="failed", error_message="Stopped by user")
+                )
+        for item in new_items:
+            await _queue.put(item)
+        if analysis_id != _current_id:
+            return True
     return False
+
+
+def is_running(analysis_id: str) -> bool:
+    return _current_id == analysis_id
 
 
 async def run_pipeline(analysis_id: str):
@@ -59,13 +123,49 @@ async def run_pipeline(analysis_id: str):
         await update_analysis(analysis_id, status="completed")
         logger.info(f"Pipeline completed: {analysis_id}")
 
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(f"Pipeline failed for {analysis_id}: {e}")
         await update_analysis(analysis_id, status="failed", error_message=str(e)[:1000])
 
 
+async def _resume_translate(analysis_id: str):
+    from app.llm import translate_paragraphs
+
+    try:
+        row = await get_analysis(analysis_id)
+        transcript = row.get("transcript", "")
+        transcript_ko = row.get("transcript_ko", "")
+        if not transcript:
+            return
+
+        existing_ko = []
+        if transcript_ko:
+            try:
+                existing_ko = json.loads(transcript_ko)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        skip_count = len(existing_ko)
+        await update_analysis(analysis_id, status="translating")
+
+        async def on_progress(ko_json: str):
+            await update_analysis(analysis_id, transcript_ko=ko_json)
+
+        result = await translate_paragraphs(
+            transcript, on_progress=on_progress,
+            skip_count=skip_count, existing_ko=existing_ko,
+        )
+        await update_analysis(analysis_id, transcript_ko=result, status="completed")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error(f"Resume translate failed for {analysis_id}: {e}")
+        await update_analysis(analysis_id, status="failed", error_message=str(e)[:1000])
+
+
 async def _stage_fetch(analysis_id: str) -> dict:
-    from app.db import get_analysis
     row = await get_analysis(analysis_id)
     video_id = row["video_id"]
 

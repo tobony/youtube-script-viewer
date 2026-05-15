@@ -53,9 +53,11 @@ async def _chat(prompt: str, system: str = "") -> str:
     return resp.choices[0].message.content or ""
 
 
-async def translate_paragraphs(transcript_json: str, on_progress=None) -> str:
+async def translate_paragraphs(transcript_json: str, on_progress=None, skip_count: int = 0, existing_ko: list | None = None) -> str:
     """Translate transcript JSON entries, return same JSON format with Korean text.
     on_progress(ko_paragraphs_json) is called after each paragraph is translated.
+    skip_count: number of already-translated paragraphs to skip.
+    existing_ko: previously translated paragraphs to prepend.
     """
     try:
         entries = json.loads(transcript_json)
@@ -70,8 +72,8 @@ async def translate_paragraphs(transcript_json: str, on_progress=None) -> str:
         "Output ONLY the translation, nothing else."
     )
 
-    ko_paragraphs = []
-    for para in paragraphs:
+    ko_paragraphs = list(existing_ko) if existing_ko else []
+    for para in paragraphs[skip_count:]:
         try:
             ko_text = await _chat(para["text"], system=system)
             ko_paragraphs.append({"start": para["start"], "text": ko_text})
@@ -79,7 +81,6 @@ async def translate_paragraphs(transcript_json: str, on_progress=None) -> str:
             logger.warning(f"Translation failed: {e}")
             ko_paragraphs.append({"start": para["start"], "text": ""})
 
-        # Progressive update after each paragraph
         if on_progress:
             await on_progress(json.dumps(ko_paragraphs, ensure_ascii=False))
 

@@ -31,3 +31,24 @@
 **변경 내용**:
 - `main.py`: `host="0.0.0.0"` 추가, `reload`를 `APP_ENV != "docker"` 조건으로 변경
 - `docker-compose.yml`: `APP_ENV=docker` 환경변수 추가
+
+
+
+### Windows 브라우저에서 localhost:7030 접속 불가 (Trying to reconnect)
+
+**증상**: 브라우저에 "trying to reconnect" 표시, localhost:7030 접속 안 됨.
+
+**진단**:
+- Docker 컨테이너 정상 running, restart 0회
+- WSL 내부 `curl localhost:7030` → 200 OK
+- Windows 브라우저에서만 접속 불가
+
+**원인**: WSL2 포트 포워딩 문제. WSL2는 별도 VM이라 Windows에서 WSL의 localhost로 자동 접근이 안 될 수 있음.
+
+**해결 방법 (택 1)**:
+1. WSL IP로 직접 접속: `http://<WSL_IP>:7030` (`hostname -I`로 확인)
+2. PowerShell(관리자)에서 포트 포워딩 추가:
+   ```powershell
+   netsh interface portproxy add v4tov4 listenport=7030 listenaddress=0.0.0.0 connectport=7030 connectaddress=<WSL_IP>
+   ```
+3. Windows 방화벽에서 7030 포트 허용 확인

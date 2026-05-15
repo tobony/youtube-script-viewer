@@ -19,6 +19,12 @@ def _fmt_time(seconds: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def _fmt_duration(seconds: int) -> str:
+    h, remainder = divmod(seconds, 3600)
+    m, s = divmod(remainder, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
 def _parse_transcript(raw: str) -> list[dict]:
     if not raw:
         return []
@@ -217,6 +223,19 @@ def setup_ui():
                                     ui.button("확인", on_click=confirm, color="primary")
                             dialog.open()
                         ui.button("다시 생성", on_click=regenerate, color="orange").props("outline size=sm")
+
+                        # Resume translate button (when translation is incomplete)
+                        done, total = _translation_progress(data)
+                        if total and done < total and status in ("completed", "failed", "translating"):
+                            async def resume_translate():
+                                async with httpx.AsyncClient() as c2:
+                                    r = await c2.post(f"{API_BASE}/api/analyses/{analysis_id}/resume-translate")
+                                if r.status_code == 200:
+                                    ui.notify(f"번역 이어하기 시작 ({done}/{total})", type="positive")
+                                    await load_detail()
+                                else:
+                                    ui.notify(f"오류: {r.json().get('detail', '')}", type="negative")
+                            ui.button(f"🌐 번역 이어하기 ({done}/{total})", on_click=resume_translate, color="purple").props("outline size=sm")
 
                     # Error
                     if data.get("error_message"):
@@ -448,7 +467,7 @@ def _render_grid_card(item: dict):
                 if item.get("duration_seconds"):
                     dur = item["duration_seconds"]
                     with ui.element("div").classes("absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-0.5 rounded-full"):
-                        ui.label(f"⏱ {dur // 60}:{dur % 60:02d}")
+                        ui.label(f"⏱ {_fmt_duration(dur)}")
         with ui.column().classes("p-2 gap-1"):
             ui.link(item.get("title") or item["url"], target=f"/detail/{item['id']}").classes("font-bold text-sm line-clamp-2 no-underline text-inherit")
             with ui.row().classes("gap-2 text-xs opacity-70"):
@@ -461,7 +480,7 @@ def _render_grid_card(item: dict):
                 # Show workflow step when in progress
                 status = item.get("status", "pending")
                 if status not in ("completed", "failed"):
-                    step_labels = {"pending": "대기중", "fetching": "📥 추출중", "summarizing": "📝 요약중", "translating": "🌐 번역중"}
+                    step_labels = {"pending": "대기중", "waiting": "⏳ 대기중", "fetching": "📥 추출중", "summarizing": "📝 요약중", "translating": "🌐 번역중"}
                     label = step_labels.get(status, "")
                     if status == "translating":
                         done, total = _translation_progress(item)
@@ -477,6 +496,7 @@ def _render_grid_card(item: dict):
 
 def _status_badge(status: str):
     colors = {
+        "waiting": "grey",
         "pending": "grey",
         "fetching": "blue",
         "summarizing": "orange",
