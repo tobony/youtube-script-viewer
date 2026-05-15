@@ -1,9 +1,12 @@
 """NiceGUI web UI for YouTube Script Viewer."""
 
 import json
+import os
 import re
 from nicegui import ui, app
 import httpx
+
+API_BASE = f"http://localhost:{os.getenv('APP_PORT', '7030')}"
 
 
 def _bold_to_html(text: str) -> str:
@@ -105,7 +108,7 @@ def setup_ui():
                     return
                 inp.value = ""
                 async with httpx.AsyncClient() as c:
-                    r = await c.post("http://localhost:8080/api/analyze", json={"url": url})
+                    r = await c.post(f"{API_BASE}/api/analyze", json={"url": url})
                 if r.status_code == 200:
                     ui.notify("분석 시작!", type="positive")
                     await refresh_history()
@@ -116,7 +119,7 @@ def setup_ui():
 
             async def refresh_history():
                 async with httpx.AsyncClient() as c:
-                    r = await c.get("http://localhost:8080/api/analyses?limit=50")
+                    r = await c.get(f"{API_BASE}/api/analyses?limit=50")
                 items = r.json() if r.status_code == 200 else []
 
                 # Only re-render if data changed
@@ -150,7 +153,7 @@ def setup_ui():
             async def load_detail():
                 content_area.clear()
                 async with httpx.AsyncClient() as c:
-                    r = await c.get(f"http://localhost:8080/api/analyses/{analysis_id}")
+                    r = await c.get(f"{API_BASE}/api/analyses/{analysis_id}")
                 if r.status_code != 200:
                     with content_area:
                         ui.label("Not found").classes("text-red")
@@ -180,8 +183,8 @@ def setup_ui():
                                         async def confirm():
                                             dialog.close()
                                             async with httpx.AsyncClient() as c2:
-                                                await c2.delete(f"http://localhost:8080/api/analyses/{analysis_id}")
-                                                await c2.post("http://localhost:8080/api/analyze", json={"url": data["url"]})
+                                                await c2.delete(f"{API_BASE}/api/analyses/{analysis_id}")
+                                                await c2.post(f"{API_BASE}/api/analyze", json={"url": data["url"]})
                                             ui.navigate.to("/")
                                         ui.button("확인", on_click=confirm, color="primary")
                                 dialog.open()
@@ -223,7 +226,7 @@ def setup_ui():
 
             async def poll():
                 async with httpx.AsyncClient() as c:
-                    r = await c.get(f"http://localhost:8080/api/analyses/{analysis_id}")
+                    r = await c.get(f"{API_BASE}/api/analyses/{analysis_id}")
                 if r.status_code != 200:
                     return
                 data = r.json()
@@ -379,7 +382,7 @@ def _render_grid_card(item: dict):
                     async def confirm_delete():
                         dialog.close()
                         async with httpx.AsyncClient() as c:
-                            await c.delete(f"http://localhost:8080/api/analyses/{item['id']}")
+                            await c.delete(f"{API_BASE}/api/analyses/{item['id']}")
                         ui.notify("삭제됨", type="info")
                     ui.button("삭제", on_click=confirm_delete, color="red")
             dialog.open()
