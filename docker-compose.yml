@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    container_name: youtube-script
+    restart: unless-stopped
+    ports:
+      - "7030:7030"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DB_PATH=data/youtube_scripts.db
+    # kiro-gateway는 호스트에서 별도 실행 (localhost:4000)
+    # 컨테이너에서 호스트 접근을 위해 host network 사용
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

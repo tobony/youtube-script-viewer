@@ -1,0 +1,9 @@
+.venv/
+data/
+__pycache__/
+.git/
+ref/
+docs/
+tests/
+*.pyc
+.kiro/

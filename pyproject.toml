@@ -1,0 +1,27 @@
+[project]
+name = "youtube-script"
+version = "0.1.0"
+description = "YouTube Script Viewer"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.32.0",
+    "nicegui==2.9.1",
+    "yt-dlp>=2025.4.30",
+    "youtube-transcript-api>=1.0.0",
+    "aiosqlite==0.20.0",
+    "pydantic==2.10.0",
+    "httpx==0.28.0",
+    "deep-translator>=1.11.4",
+    "openai>=2.36.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
