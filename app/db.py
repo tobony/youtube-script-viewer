@@ -27,6 +27,8 @@ async def init_db():
             duration_seconds INTEGER DEFAULT 0,
             view_count INTEGER DEFAULT 0,
             like_count INTEGER DEFAULT 0,
+            video_lang TEXT,
+            llm_enabled INTEGER DEFAULT 1,
             transcript TEXT,
             transcript_lang TEXT,
             summary_short TEXT,
@@ -50,6 +52,8 @@ async def init_db():
         "error_message": "TEXT",
         "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
         "like_count": "INTEGER DEFAULT 0",
+        "video_lang": "TEXT",
+        "llm_enabled": "INTEGER DEFAULT 1",
     }
     for col, typedef in migrations.items():
         if col not in cols:
@@ -58,13 +62,13 @@ async def init_db():
     await db.close()
 
 
-async def create_analysis(video_id: str, url: str) -> dict:
+async def create_analysis(video_id: str, url: str, llm_enabled: bool = True) -> dict:
     db = await get_db()
     row_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     await db.execute(
-        "INSERT INTO analyses (id, video_id, url, status, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?)",
-        (row_id, video_id, url, now, now),
+        "INSERT INTO analyses (id, video_id, url, llm_enabled, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+        (row_id, video_id, url, 1 if llm_enabled else 0, now, now),
     )
     await db.commit()
     row = await db.execute("SELECT * FROM analyses WHERE id = ?", (row_id,))

@@ -19,8 +19,15 @@ async def test_create_and_get():
     row = await create_analysis(video_id="abc123", url="https://youtube.com/watch?v=abc123")
     assert row["video_id"] == "abc123"
     assert row["status"] == "pending"
+    assert row["llm_enabled"] == 1
     fetched = await get_analysis(row["id"])
     assert fetched["url"] == "https://youtube.com/watch?v=abc123"
+
+
+@pytest.mark.asyncio
+async def test_create_with_llm_disabled():
+    row = await create_analysis(video_id="abc123", url="https://youtube.com/watch?v=abc123", llm_enabled=False)
+    assert row["llm_enabled"] == 0
 
 
 @pytest.mark.asyncio

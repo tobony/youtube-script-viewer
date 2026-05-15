@@ -1,4 +1,7 @@
 .venv/
+.uv-cache/
+.uv-python/
+.pytest_cache/
 data/
 __pycache__/
 *.pyc

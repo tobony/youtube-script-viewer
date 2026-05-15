@@ -1,11 +1,15 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, HTTPException
 
 from app.models import AnalyzeRequest, AnalysisResponse
 from app.youtube import extract_video_id
-from app.db import create_analysis, get_analysis, get_by_video_id, list_analyses, delete_analysis
+from app.db import create_analysis, get_analysis, get_by_video_id, list_analyses, delete_analysis, update_analysis
 from app.pipeline import start_pipeline, stop_pipeline, start_resume_translate, is_running
 
 router = APIRouter(prefix="/api")
+
+TRANSIENT_FAILURE_RETRY_COOLDOWN = timedelta(minutes=30)
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
@@ -15,12 +19,35 @@ async def analyze(req: AnalyzeRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Return existing if already completed or in progress
+    # Return existing if already completed or in progress.
+    # Older runs could be marked completed even when transcript extraction failed;
+    # those should be retried instead of short-circuiting immediately.
     existing = await get_by_video_id(video_id)
-    if existing and existing.get("status") not in (None, "failed"):
+    if existing and _is_transient_failure_in_cooldown(existing):
         return existing
+    if (
+        existing
+        and existing.get("status") not in (None, "failed")
+        and (existing.get("status") != "completed" or existing.get("transcript"))
+    ):
+        return existing
+    if existing:
+        row = await update_analysis(
+            existing["id"],
+            url=req.url,
+            llm_enabled=1 if req.llm_enabled else 0,
+            transcript=None,
+            transcript_lang=None,
+            summary_short=None,
+            summary_structured=None,
+            transcript_ko=None,
+            error_message=None,
+            status="pending",
+        )
+        start_pipeline(row["id"])
+        return row
 
-    row = await create_analysis(video_id=video_id, url=req.url)
+    row = await create_analysis(video_id=video_id, url=req.url, llm_enabled=req.llm_enabled)
     start_pipeline(row["id"])
     return row
 
@@ -65,3 +92,18 @@ async def resume_translate(analysis_id: str):
         raise HTTPException(status_code=400, detail="Already running")
     start_resume_translate(analysis_id)
     return {"ok": True}
+
+
+def _is_transient_failure_in_cooldown(row: dict) -> bool:
+    if row.get("status") != "failed":
+        return False
+    error_message = (row.get("error_message") or "").lower()
+    if "rate limited" not in error_message and "blocking transcript requests" not in error_message:
+        return False
+    try:
+        updated_at = datetime.fromisoformat(row.get("updated_at") or "")
+    except ValueError:
+        return False
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - updated_at < TRANSIENT_FAILURE_RETRY_COOLDOWN

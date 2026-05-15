@@ -104,57 +104,57 @@ def setup_ui():
             # Header row
             with ui.row().classes("w-full items-center"):
                 ui.label("YouTube Script Viewer").classes("text-3xl font-bold flex-grow")
-                with ui.button(icon="menu").props("flat round"):
-                    with ui.menu().classes("p-4"):
-                        with ui.column().classes("gap-3 w-72"):
-                            ui.label("Settings").classes("text-base font-bold")
-                            llm_switch = ui.switch("AI translate/summarize", value=pipeline.llm_enabled)
-                            llm_switch.on_value_change(lambda e: setattr(pipeline, "llm_enabled", e.value))
+                with ui.row().classes("items-center gap-2"):
+                    llm_switch = ui.switch("AI translate/summarize", value=pipeline.llm_enabled).props("dense")
+                    llm_switch.on_value_change(lambda e: setattr(pipeline, "llm_enabled", e.value))
+                    ui.button(icon="light_mode", on_click=lambda: dark.set_value(not dark.value)).props("flat round")
+                    ui.toggle({"list": "☰", "grid": "▦"}, value="grid",
+                              on_change=lambda e: _set_layout(e.value)).props("dense")
+                    with ui.button(icon="menu").props("flat round"):
+                        with ui.menu().classes("p-4"):
+                            with ui.column().classes("gap-3 w-72"):
+                                ui.label("Settings").classes("text-base font-bold")
+                                model_input = ui.input(
+                                    "Model",
+                                    value=llm.get_model(llm.LLM_PROVIDER),
+                                ).props("dense outlined").classes("w-full")
 
-                            model_input = ui.input(
-                                "Model",
-                                value=llm.get_model(llm.LLM_PROVIDER),
-                            ).props("dense outlined").classes("w-full")
-
-                            def update_provider(e):
-                                llm.LLM_PROVIDER = e.value
-                                model_input.set_value(llm.get_model(e.value))
-                                key_status.set_text(
-                                    "API key loaded" if llm.has_api_key(e.value) else "API key missing"
-                                )
-                                api_key_input.set_value("")
-
-                            ui.select(
-                                llm.PROVIDERS,
-                                label="Provider",
-                                value=llm.LLM_PROVIDER,
-                                on_change=update_provider,
-                            ).props("dense outlined").classes("w-full")
-
-                            model_input.on_value_change(
-                                lambda e: llm.set_model(llm.LLM_PROVIDER, e.value)
-                            )
-
-                            key_status = ui.label(
-                                "API key loaded" if llm.has_api_key(llm.LLM_PROVIDER) else "API key missing"
-                            ).classes("text-xs opacity-70")
-                            api_key_input = ui.input("API key").props(
-                                "dense outlined type=password autocomplete=off"
-                            ).classes("w-full")
-
-                            def apply_api_key():
-                                if llm.set_api_key(llm.LLM_PROVIDER, api_key_input.value or ""):
+                                def update_provider(e):
+                                    llm.LLM_PROVIDER = e.value
+                                    model_input.set_value(llm.get_model(e.value))
+                                    key_status.set_text(
+                                        "API key loaded" if llm.has_api_key(e.value) else "API key missing"
+                                    )
                                     api_key_input.set_value("")
-                                    key_status.set_text("Runtime API key applied")
-                                    ui.notify("API key applied for this session", type="positive")
-                                else:
-                                    ui.notify("Enter a non-empty API key", type="warning")
 
-                            ui.button("Apply API key", on_click=apply_api_key).props("outline size=sm")
-                            ui.label("Runtime API keys are not saved. Restarting the app uses .env again.").classes("text-xs opacity-70")
-                ui.button(icon="light_mode", on_click=lambda: dark.set_value(not dark.value)).props("flat round")
-                ui.toggle({"list": "☰", "grid": "▦"}, value="grid",
-                          on_change=lambda e: _set_layout(e.value)).props("dense")
+                                ui.select(
+                                    llm.PROVIDERS,
+                                    label="Provider",
+                                    value=llm.LLM_PROVIDER,
+                                    on_change=update_provider,
+                                ).props("dense outlined").classes("w-full")
+
+                                model_input.on_value_change(
+                                    lambda e: llm.set_model(llm.LLM_PROVIDER, e.value)
+                                )
+
+                                key_status = ui.label(
+                                    "API key loaded" if llm.has_api_key(llm.LLM_PROVIDER) else "API key missing"
+                                ).classes("text-xs opacity-70")
+                                api_key_input = ui.input("API key").props(
+                                    "dense outlined type=password autocomplete=off"
+                                ).classes("w-full")
+
+                                def apply_api_key():
+                                    if llm.set_api_key(llm.LLM_PROVIDER, api_key_input.value or ""):
+                                        api_key_input.set_value("")
+                                        key_status.set_text("Runtime API key applied")
+                                        ui.notify("API key applied for this session", type="positive")
+                                    else:
+                                        ui.notify("Enter a non-empty API key", type="warning")
+
+                                ui.button("Apply API key", on_click=apply_api_key).props("outline size=sm")
+                                ui.label("Runtime API keys are not saved. Restarting the app uses .env again.").classes("text-xs opacity-70")
 
             with ui.row().classes("w-full gap-4 items-center"):
                 ui.button("분석", on_click=lambda: submit(url_input)).classes("px-8")
@@ -175,7 +175,10 @@ def setup_ui():
                     return
                 inp.value = ""
                 async with httpx.AsyncClient() as c:
-                    r = await c.post(f"{API_BASE}/api/analyze", json={"url": url})
+                    r = await c.post(
+                        f"{API_BASE}/api/analyze",
+                        json={"url": url, "llm_enabled": bool(llm_switch.value)},
+                    )
                 if r.status_code == 200:
                     ui.notify("분석 시작!", type="positive")
                     await refresh_history()
@@ -204,7 +207,7 @@ def setup_ui():
                             for item in items:
                                 _render_card(item)
 
-            await refresh_history()
+            ui.timer(0.1, refresh_history, once=True)
             ui.timer(3.0, refresh_history)
 
     @ui.page("/detail/{analysis_id}")
@@ -245,6 +248,9 @@ def setup_ui():
                                 await load_detail()
                             ui.button("Stop", on_click=stop_analysis, color="red").props("outline size=sm")
                         async def regenerate():
+                            if _is_transient_youtube_error(data.get("error_message")):
+                                ui.notify(data["error_message"], type="warning")
+                                return
                             with ui.dialog() as dialog, ui.card():
                                 ui.label("다시 생성하시겠습니까?").classes("text-base")
                                 ui.label("transcript와 번역/요약을 다시 수행합니다.").classes("text-sm opacity-70")
@@ -255,7 +261,13 @@ def setup_ui():
                                         async with httpx.AsyncClient() as c2:
                                             await c2.post(f"{API_BASE}/api/analyses/{analysis_id}/stop")
                                             await c2.delete(f"{API_BASE}/api/analyses/{analysis_id}")
-                                            await c2.post(f"{API_BASE}/api/analyze", json={"url": data["url"]})
+                                            await c2.post(
+                                                f"{API_BASE}/api/analyze",
+                                                json={
+                                                    "url": data["url"],
+                                                    "llm_enabled": bool(data.get("llm_enabled", True)),
+                                                },
+                                            )
                                         ui.navigate.to("/")
                                     ui.button("확인", on_click=confirm, color="primary")
                             dialog.open()
@@ -312,7 +324,7 @@ def setup_ui():
                             duration,
                         )
 
-            await load_detail()
+            ui.timer(0.1, load_detail, once=True)
             _last_status = [None]
             _last_ko_len = [0]
 
@@ -540,3 +552,10 @@ def _status_badge(status: str):
         "failed": "red",
     }
     ui.badge(status, color=colors.get(status, "grey"))
+
+
+def _is_transient_youtube_error(error_message: str | None) -> bool:
+    if not error_message:
+        return False
+    lowered = error_message.lower()
+    return "rate limited" in lowered or "blocking transcript requests" in lowered

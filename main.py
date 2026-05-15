@@ -2,19 +2,11 @@
 
 import os
 from dotenv import load_dotenv
-from nicegui import app, ui
-from app.db import init_db
-from app.routers import router
+from nicegui import ui
+from app.main import app
 from app.ui import setup_ui
 
 load_dotenv()
-
-app.include_router(router)
-
-
-@app.on_startup
-async def startup():
-    await init_db()
 
 
 setup_ui()

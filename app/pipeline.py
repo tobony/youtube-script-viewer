@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from app.db import update_analysis, get_analysis
-from app.youtube import get_metadata, get_transcript_with_language
+from app.youtube import TranscriptFetchError, get_metadata, get_transcript_with_language
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +98,15 @@ async def run_pipeline(analysis_id: str):
         row = await _stage_fetch(analysis_id)
 
         transcript = row.get("transcript", "")
+        if not transcript:
+            await update_analysis(
+                analysis_id,
+                status="failed",
+                error_message=row.get("error_message") or "Transcript unavailable or could not be fetched",
+            )
+            return
 
-        if llm_enabled and transcript:
+        if bool(row.get("llm_enabled", True)) and transcript:
             from app.llm import summarize, translate_paragraphs
 
             try:
@@ -173,11 +180,17 @@ async def _stage_fetch(analysis_id: str) -> dict:
     video_id = row["video_id"]
 
     metadata = await asyncio.to_thread(get_metadata, video_id)
+    error_message = None
     try:
-        transcript, transcript_lang = await asyncio.to_thread(get_transcript_with_language, video_id)
-    except Exception:
+        transcript, transcript_lang = await asyncio.to_thread(
+            get_transcript_with_language,
+            video_id,
+            metadata.get("video_lang") or "en",
+        )
+    except TranscriptFetchError as e:
         transcript = ""
         transcript_lang = None
+        error_message = str(e)
 
     row = await update_analysis(
         analysis_id,
@@ -187,8 +200,10 @@ async def _stage_fetch(analysis_id: str) -> dict:
         duration_seconds=metadata["duration_seconds"],
         view_count=metadata["view_count"],
         like_count=metadata["like_count"],
+        video_lang=metadata.get("video_lang"),
         transcript=transcript,
         transcript_lang=transcript_lang,
+        error_message=error_message,
     )
     return row
 

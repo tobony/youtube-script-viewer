@@ -4,6 +4,7 @@ from typing import Optional
 
 class AnalyzeRequest(BaseModel):
     url: str
+    llm_enabled: bool = True
 
 
 class AnalysisResponse(BaseModel):
@@ -16,6 +17,8 @@ class AnalysisResponse(BaseModel):
     duration_seconds: int = 0
     view_count: int = 0
     like_count: int = 0
+    video_lang: Optional[str] = None
+    llm_enabled: bool = True
     transcript: Optional[str] = None
     transcript_lang: Optional[str] = None
     summary_short: Optional[str] = None
