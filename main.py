@@ -20,10 +20,11 @@ async def startup():
 setup_ui()
 
 ui.run(
+    host="0.0.0.0",
     port=int(os.getenv("APP_PORT", "8080")),
     title="YouTube Script Viewer",
     favicon="🎬",
     dark=True,
-    reload=True,
+    reload=os.getenv("APP_ENV") != "docker",
     show=False,
 )

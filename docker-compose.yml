@@ -9,6 +9,7 @@ services:
       - ./data:/app/data
     environment:
       - APP_PORT=7030
+      - APP_ENV=docker
       - DB_PATH=data/youtube_scripts.db
     # kiro-gateway는 호스트에서 별도 실행 (localhost:4000)
     # 컨테이너에서 호스트 접근을 위해 host network 사용
