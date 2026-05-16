@@ -1,10 +1,12 @@
-"""LLM service — Azure OpenAI (default) or kiro-gateway."""
+"""LLM service with provider-specific API adapters."""
 
 import json
 import logging
 import os
+from typing import Any
+
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -40,35 +42,53 @@ PROVIDERS = {
 }
 
 
-def _get_client():
-    if LLM_PROVIDER == "azure":
+class LLMServiceError(RuntimeError):
+    """User-facing LLM failure with configuration hints."""
+
+
+def _get_client(provider: str | None = None, model: str | None = None, http_client: Any = None):
+    provider = provider or LLM_PROVIDER
+    if provider == "azure":
         return AsyncOpenAI(
             base_url=_normalize_azure_base_url(AZURE_ENDPOINT),
             api_key=AZURE_API_KEY,
-        ), AZURE_MODEL
-    if LLM_PROVIDER == "kiro":
+            http_client=http_client,
+        ), model or AZURE_MODEL, "responses"
+    if provider == "kiro":
         return AsyncOpenAI(
-            base_url=KIRO_BASE_URL,
+            base_url=_normalize_base_url(KIRO_BASE_URL),
             api_key=KIRO_API_KEY,
-        ), KIRO_MODEL
-    if LLM_PROVIDER == "openai":
-        return AsyncOpenAI(api_key=OPENAI_API_KEY), OPENAI_MODEL
-    if LLM_PROVIDER == "openrouter":
+            http_client=http_client,
+        ), model or KIRO_MODEL, "chat"
+    if provider == "openai":
+        return AsyncOpenAI(api_key=OPENAI_API_KEY, http_client=http_client), model or OPENAI_MODEL, "responses"
+    if provider == "openrouter":
         return AsyncOpenAI(
-            base_url=OPENROUTER_BASE_URL,
+            base_url=_normalize_base_url(OPENROUTER_BASE_URL),
             api_key=OPENROUTER_API_KEY,
-        ), OPENROUTER_MODEL
-    raise ValueError(f"Unsupported LLM_PROVIDER: {LLM_PROVIDER}")
+            http_client=http_client,
+        ), model or OPENROUTER_MODEL, "responses"
+    raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
 
 
 def _normalize_azure_base_url(endpoint: str) -> str:
-    endpoint = endpoint.strip().rstrip("/")
+    endpoint = _normalize_base_url(endpoint)
     if not endpoint:
         return endpoint
-    if "services.ai.azure.com" in endpoint and not endpoint.endswith("/models"):
-        return f"{endpoint}/models"
+    if endpoint.endswith("/openai/v1"):
+        return endpoint
+    if "services.ai.azure.com" in endpoint:
+        return f"{endpoint}/openai/v1"
     if "openai.azure.com" in endpoint and "/openai/v1" not in endpoint:
         return f"{endpoint}/openai/v1"
+    return endpoint
+
+
+def _normalize_base_url(endpoint: str) -> str:
+    endpoint = endpoint.strip().rstrip("/")
+    for suffix in ("/responses", "/chat/completions"):
+        if endpoint.endswith(suffix):
+            endpoint = endpoint[: -len(suffix)]
     return endpoint
 
 
@@ -128,13 +148,39 @@ def set_api_key(provider: str, api_key: str) -> bool:
     return True
 
 
-async def _chat(prompt: str, system: str = "") -> str:
-    client, model = _get_client()
+async def _chat(
+    prompt: str,
+    system: str = "",
+    provider: str | None = None,
+    model: str | None = None,
+) -> str:
+    provider = provider or LLM_PROVIDER
+    client, resolved_model, api_style = _get_client(provider=provider, model=model)
+    try:
+        if api_style == "responses":
+            return await _call_responses(client, resolved_model, prompt, system)
+        return await _call_chat_completions(client, resolved_model, prompt, system)
+    except Exception as e:
+        raise LLMServiceError(_format_llm_error(e, provider=provider, model=resolved_model)) from e
+
+
+async def _call_responses(client: AsyncOpenAI, model: str, prompt: str, system: str = "") -> str:
+    kwargs = {
+        "model": model,
+        "input": prompt,
+        "max_output_tokens": 4096,
+    }
+    if system:
+        kwargs["instructions"] = system
+    resp = await client.responses.create(**kwargs)
+    return _extract_responses_text(resp)
+
+
+async def _call_chat_completions(client: AsyncOpenAI, model: str, prompt: str, system: str = "") -> str:
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-
     resp = await client.chat.completions.create(
         model=model,
         messages=messages,
@@ -143,7 +189,53 @@ async def _chat(prompt: str, system: str = "") -> str:
     return resp.choices[0].message.content or ""
 
 
-async def translate_paragraphs(transcript_json: str, on_progress=None, skip_count: int = 0, existing_ko: list | None = None) -> str:
+def _extract_responses_text(response: Any) -> str:
+    output_text = getattr(response, "output_text", None)
+    if output_text:
+        return output_text
+
+    output = getattr(response, "output", None)
+    if not output and isinstance(response, dict):
+        output = response.get("output")
+    texts = []
+    for item in output or []:
+        content = getattr(item, "content", None)
+        if content is None and isinstance(item, dict):
+            content = item.get("content")
+        for part in content or []:
+            text = getattr(part, "text", None)
+            if text is None and isinstance(part, dict):
+                text = part.get("text")
+            if text:
+                texts.append(text)
+    return "\n".join(texts)
+
+
+def _format_llm_error(error: Exception, provider: str | None = None, model: str | None = None) -> str:
+    provider = provider or LLM_PROVIDER
+    model = model or get_model(provider)
+    if isinstance(error, APIStatusError) and error.status_code == 404:
+        if provider == "azure":
+            return (
+                "Azure OpenAI resource not found. Check AZURE_ENDPOINT and make sure the model is the "
+                f"deployment name. Current endpoint: {_normalize_azure_base_url(AZURE_ENDPOINT)}. "
+                f"Current model: {model}"
+            )
+        return (
+            f"{PROVIDERS.get(provider, provider)} resource not found. "
+            f"Check the selected model name. Current model: {model}"
+        )
+    return str(error)
+
+
+async def translate_paragraphs(
+    transcript_json: str,
+    on_progress=None,
+    skip_count: int = 0,
+    existing_ko: list | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> str:
     """Translate transcript JSON entries, return same JSON format with Korean text.
     on_progress(ko_paragraphs_json) is called after each paragraph is translated.
     skip_count: number of already-translated paragraphs to skip.
@@ -165,11 +257,15 @@ async def translate_paragraphs(transcript_json: str, on_progress=None, skip_coun
     ko_paragraphs = list(existing_ko) if existing_ko else []
     for para in paragraphs[skip_count:]:
         try:
-            ko_text = await _chat(para["text"], system=system)
+            ko_text = await _chat(para["text"], system=system, provider=provider, model=model)
             ko_paragraphs.append({"start": para["start"], "text": ko_text})
+        except LLMServiceError as e:
+            logger.warning("Translation failed: %s", e)
+            raise
         except Exception as e:
-            logger.warning(f"Translation failed: {e}")
-            ko_paragraphs.append({"start": para["start"], "text": ""})
+            message = _format_llm_error(e, provider=provider, model=model)
+            logger.warning("Translation failed: %s", message)
+            raise LLMServiceError(message) from e
 
         if on_progress:
             await on_progress(json.dumps(ko_paragraphs, ensure_ascii=False))
@@ -177,7 +273,7 @@ async def translate_paragraphs(transcript_json: str, on_progress=None, skip_coun
     return json.dumps(ko_paragraphs, ensure_ascii=False)
 
 
-async def summarize(transcript_json: str) -> tuple[str, str]:
+async def summarize(transcript_json: str, provider: str | None = None, model: str | None = None) -> tuple[str, str]:
     """Generate Korean summary from transcript."""
     try:
         entries = json.loads(transcript_json)
@@ -200,10 +296,14 @@ async def summarize(transcript_json: str) -> tuple[str, str]:
     )
 
     try:
-        result = await _chat(prompt)
+        result = await _chat(prompt, provider=provider, model=model)
+    except LLMServiceError as e:
+        logger.warning("Summarize failed: %s", e)
+        raise
     except Exception as e:
-        logger.warning(f"Summarize failed: {e}")
-        return "", ""
+        message = _format_llm_error(e, provider=provider, model=model)
+        logger.warning("Summarize failed: %s", message)
+        raise LLMServiceError(message) from e
 
     short = ""
     structured = ""

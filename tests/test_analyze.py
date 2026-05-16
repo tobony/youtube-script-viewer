@@ -6,7 +6,7 @@ from httpx import ASGITransport, AsyncClient
 os.environ["DB_PATH"] = "data/test_analyze.db"
 
 from app.main import app
-from app.db import create_analysis, init_db, update_analysis
+from app.db import create_analysis, get_analysis, init_db, update_analysis
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +34,7 @@ async def test_analyze_starts_pipeline():
         assert data["video_id"] == "dQw4w9WgXcQ"
         assert data["status"] == "pending"
         assert data["llm_enabled"] is True
-        mock_start.assert_called_once_with(data["id"])
+        mock_start.assert_called_once_with(data["id"], llm_provider=None, llm_model=None)
 
 
 @pytest.mark.asyncio
@@ -49,7 +49,25 @@ async def test_analyze_stores_llm_enabled_for_job():
     assert r.status_code == 200
     data = r.json()
     assert data["llm_enabled"] is False
-    mock_start.assert_called_once_with(data["id"])
+    mock_start.assert_called_once_with(data["id"], llm_provider=None, llm_model=None)
+
+
+@pytest.mark.asyncio
+async def test_analyze_passes_llm_snapshot_to_job():
+    with patch("app.routers.start_pipeline") as mock_start:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post(
+                "/api/analyze",
+                json={
+                    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                    "llm_provider": "openai",
+                    "llm_model": "gpt-test",
+                },
+            )
+
+    assert r.status_code == 200
+    data = r.json()
+    mock_start.assert_called_once_with(data["id"], llm_provider="openai", llm_model="gpt-test")
 
 
 @pytest.mark.asyncio
@@ -69,7 +87,7 @@ async def test_analyze_retries_empty_completed_result():
     assert data["id"] == stale["id"]
     assert data["status"] == "pending"
     assert data["transcript"] is None
-    mock_start.assert_called_once_with(stale["id"])
+    mock_start.assert_called_once_with(stale["id"], llm_provider=None, llm_model=None)
 
 
 @pytest.mark.asyncio
@@ -100,7 +118,7 @@ async def test_analyze_retries_failed_existing_result_in_place():
     assert data["llm_enabled"] is True
     assert data["error_message"] is None
     assert data["summary_short"] is None
-    mock_start.assert_called_once_with(stale["id"])
+    mock_start.assert_called_once_with(stale["id"], llm_provider=None, llm_model=None)
 
 
 @pytest.mark.asyncio
@@ -124,3 +142,56 @@ async def test_analyze_does_not_retry_transient_youtube_failure_immediately():
     assert data["id"] == stale["id"]
     assert data["status"] == "failed"
     mock_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_analyze_force_retries_completed_result_in_place():
+    stale = await create_analysis(
+        video_id="I4zwZP80u-Y",
+        url="https://www.youtube.com/watch?v=I4zwZP80u-Y",
+    )
+    await update_analysis(
+        stale["id"],
+        status="completed",
+        transcript='[{"start": 0, "text": "old transcript"}]',
+        summary_short="old summary",
+        transcript_ko='[{"start": 0, "text": "old ko"}]',
+    )
+
+    with patch("app.routers.start_pipeline") as mock_start:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post(
+                "/api/analyze",
+                json={"url": "https://www.youtube.com/watch?v=I4zwZP80u-Y", "force": True},
+            )
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["id"] == stale["id"]
+    assert data["status"] == "pending"
+    assert data["transcript"] is None
+    assert data["summary_short"] is None
+    assert data["transcript_ko"] is None
+    mock_start.assert_called_once_with(stale["id"], llm_provider=None, llm_model=None)
+
+
+@pytest.mark.asyncio
+async def test_resume_translate_passes_llm_snapshot_to_job():
+    row = await create_analysis(
+        video_id="I4zwZP80u-Y",
+        url="https://www.youtube.com/watch?v=I4zwZP80u-Y",
+    )
+    await update_analysis(row["id"], status="failed", transcript='[{"start": 0, "text": "hello"}]')
+
+    with patch("app.routers.start_resume_translate") as mock_start:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post(
+                f"/api/analyses/{row['id']}/resume-translate",
+                json={"llm_provider": "azure", "llm_model": "deployment-a"},
+            )
+
+    assert r.status_code == 200
+    data = await get_analysis(row["id"])
+    assert data["status"] == "waiting"
+    assert data["error_message"] is None
+    mock_start.assert_called_once_with(row["id"], llm_provider="azure", llm_model="deployment-a")

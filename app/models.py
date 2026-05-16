@@ -5,6 +5,14 @@ from typing import Optional
 class AnalyzeRequest(BaseModel):
     url: str
     llm_enabled: bool = True
+    force: bool = False
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class ResumeTranslateRequest(BaseModel):
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
 
 
 class AnalysisResponse(BaseModel):
