@@ -93,6 +93,31 @@ def _step_index(status: str) -> int:
     return -1  # pending
 
 
+def _analysis_matches_search(item: dict, query: str) -> bool:
+    """Return True when an analysis should be visible for the search query."""
+    normalized_query = (query or "").strip().lower()
+    if not normalized_query:
+        return True
+
+    searchable_fields = (
+        "title",
+        "channel",
+        "url",
+        "video_id",
+        "status",
+        "summary_short",
+    )
+    return any(
+        normalized_query in str(item.get(field) or "").lower()
+        for field in searchable_fields
+    )
+
+
+def _filter_analyses(items: list[dict], query: str) -> list[dict]:
+    """Filter analyses by title, channel, URL, video ID, status, or summary."""
+    return [item for item in items if _analysis_matches_search(item, query)]
+
+
 def setup_ui():
     @ui.page("/")
     async def main_page():
@@ -117,6 +142,9 @@ def setup_ui():
             with ui.row().classes("w-full gap-4 items-center"):
                 ui.button("분석", on_click=lambda: submit(url_input)).classes("px-8")
                 url_input = ui.input(placeholder="YouTube URL을 입력하세요...").classes("flex-grow")
+                search_input = ui.input(
+                    placeholder="검색어를 입력하세요...",
+                ).props("clearable").classes("w-72")
 
 
             history_container = ui.element("div").classes("w-full")
@@ -147,27 +175,49 @@ def setup_ui():
 
             _last_data = [None]
 
+            async def search_history():
+                _last_data[0] = None
+                await refresh_history()
+
+            search_input.on_value_change(lambda _: asyncio.ensure_future(search_history()))
+
             async def refresh_history():
                 if not _is_client_alive(client):
                     history_timer.cancel()
                     return
                 items = await list_analyses(limit=50)
+                search_query = search_input.value or ""
+                visible_items = _filter_analyses(items, search_query)
 
                 # Only re-render if data changed
-                data_key = json.dumps([(i.get("id"), i.get("status"), (i.get("summary_short") or "")[:20], len(i.get("transcript_ko") or "")) for i in items])
+                data_key = json.dumps([
+                    search_query,
+                    [
+                        (
+                            i.get("id"),
+                            i.get("status"),
+                            (i.get("summary_short") or "")[:20],
+                            len(i.get("transcript_ko") or ""),
+                        )
+                        for i in visible_items
+                    ],
+                ])
                 if data_key == _last_data[0]:
                     return
                 _last_data[0] = data_key
 
                 history_container.clear()
                 with history_container:
+                    if search_query.strip() and not visible_items:
+                        ui.label("검색 결과가 없습니다.").classes("w-full text-center opacity-60 py-8")
+                        return
                     if layout_mode["value"] == "grid":
                         with ui.grid(columns=3).classes("w-full gap-4"):
-                            for item in items:
+                            for item in visible_items:
                                 _render_grid_card(item)
                     else:
                         with ui.column().classes("w-full gap-3"):
-                            for item in items:
+                            for item in visible_items:
                                 _render_card(item)
 
             initial_history_timer = ui.timer(0.1, refresh_history, once=True)
