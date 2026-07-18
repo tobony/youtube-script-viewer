@@ -105,6 +105,13 @@ KIRO_MODEL=claude-haiku-4-5
 
 UI에서도 런타임에 프로바이더를 전환할 수 있습니다.
 
+### 개발용 샘플 DB
+
+기본 DB인 `data/youtube_scripts.db`가 없으면 앱 시작 시
+`sample_data/youtube_scripts.db`를 자동으로 복사해 샘플 목록을 표시합니다.
+이미 기본 DB가 있거나 `DB_PATH`를 다른 경로로 지정한 경우에는 기존 DB를
+덮어쓰거나 샘플 데이터를 추가하지 않습니다.
+
 ## kiro-gateway 활용 (다른 프로젝트에서도 사용)
 
 ```python

@@ -1,10 +1,48 @@
 import aiosqlite
 import os
+import shutil
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-DB_PATH = os.getenv("DB_PATH", "data/youtube_scripts.db")
+DEFAULT_DB_PATH = "data/youtube_scripts.db"
+DEFAULT_SAMPLE_DB_PATH = "sample_data/youtube_scripts.db"
+
+DB_PATH = os.getenv("DB_PATH", DEFAULT_DB_PATH)
+SAMPLE_DB_PATH = os.getenv("SAMPLE_DB_PATH", DEFAULT_SAMPLE_DB_PATH)
+
+
+def copy_sample_db_if_missing() -> bool:
+    """Copy the bundled sample DB when the default runtime DB is absent.
+
+    Custom DB_PATH values are intentionally left empty so tests, deployments,
+    and one-off databases never receive sample records unexpectedly.
+    """
+    db_path = Path(DB_PATH)
+    default_db_path = Path(DEFAULT_DB_PATH)
+    sample_db_path = Path(SAMPLE_DB_PATH)
+
+    if db_path.resolve() != default_db_path.resolve():
+        return False
+    if db_path.exists() or not sample_db_path.is_file():
+        return False
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = db_path.with_name(f".{db_path.name}.{uuid.uuid4().hex}.tmp")
+
+    try:
+        shutil.copy2(sample_db_path, temp_path)
+        try:
+            # Linking the completed temporary copy is atomic and never
+            # overwrites a DB another startup process may have just created.
+            os.link(temp_path, db_path)
+        except FileExistsError:
+            return False
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    return True
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -15,6 +53,7 @@ async def get_db() -> aiosqlite.Connection:
 
 
 async def init_db():
+    copy_sample_db_if_missing()
     db = await get_db()
     await db.execute("""
         CREATE TABLE IF NOT EXISTS analyses (

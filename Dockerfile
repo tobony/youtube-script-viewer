@@ -14,6 +14,7 @@ RUN uv sync --no-dev --frozen
 # Copy app code
 COPY main.py .
 COPY app/ app/
+COPY sample_data/ sample_data/
 
 EXPOSE 7030
 
