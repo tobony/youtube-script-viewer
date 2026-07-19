@@ -3,6 +3,7 @@
 from nicegui import app
 
 from app.db import init_db
+from app.codex_provider import close_codex_client
 from app.routers import router
 
 
@@ -17,3 +18,8 @@ async def health():
 @app.on_startup
 async def startup():
     await init_db()
+
+
+@app.on_shutdown
+async def shutdown():
+    await close_codex_client()

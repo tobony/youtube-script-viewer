@@ -3,10 +3,12 @@
 import json
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any
 
 from dotenv import load_dotenv
 from openai import APIStatusError, AsyncOpenAI
+from app.transcript import merge_transcript_entries
 
 logger = logging.getLogger(__name__)
 
@@ -18,28 +20,70 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "azure")
 # Azure OpenAI
 AZURE_API_KEY = os.getenv("AZURE_API_KEY", "")
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT", "")
+AZURE_REGION = os.getenv("AZURE_REGION", "")
 AZURE_MODEL = os.getenv("AZURE_MODEL", "gpt-5.4-nano")
+AZURE_SUMMARY_MODEL = os.getenv("AZURE_SUMMARY_MODEL", AZURE_MODEL)
+AZURE_TRANSLATION_MODEL = os.getenv("AZURE_TRANSLATION_MODEL", AZURE_MODEL)
 
 # kiro-gateway
 KIRO_BASE_URL = os.getenv("KIRO_BASE_URL", "http://localhost:4000/v1")
 KIRO_API_KEY = os.getenv("KIRO_API_KEY", "kiro-local")
 KIRO_MODEL = os.getenv("KIRO_MODEL", "claude-haiku-4-5")
+KIRO_SUMMARY_MODEL = os.getenv("KIRO_SUMMARY_MODEL", KIRO_MODEL)
+KIRO_TRANSLATION_MODEL = os.getenv("KIRO_TRANSLATION_MODEL", KIRO_MODEL)
 
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+OPENAI_SUMMARY_MODEL = os.getenv("OPENAI_SUMMARY_MODEL", OPENAI_MODEL)
+OPENAI_TRANSLATION_MODEL = os.getenv("OPENAI_TRANSLATION_MODEL", OPENAI_MODEL)
 
 # OpenRouter
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-5.4-mini")
+OPENROUTER_SUMMARY_MODEL = os.getenv("OPENROUTER_SUMMARY_MODEL", OPENROUTER_MODEL)
+OPENROUTER_TRANSLATION_MODEL = os.getenv("OPENROUTER_TRANSLATION_MODEL", OPENROUTER_MODEL)
 
-PROVIDERS = {
-    "azure": "Azure OpenAI",
-    "kiro": "Kiro Gateway",
-    "openai": "OpenAI",
-    "openrouter": "OpenRouter",
+# Google Gemini (OpenAI compatibility endpoint)
+GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_SUMMARY_MODEL = os.getenv("GEMINI_SUMMARY_MODEL", GEMINI_MODEL)
+GEMINI_TRANSLATION_MODEL = os.getenv("GEMINI_TRANSLATION_MODEL", GEMINI_MODEL)
+
+# Codex with ChatGPT-managed subscription authentication
+CODEX_MODEL = os.getenv("CODEX_MODEL", "gpt-5.6-terra")
+CODEX_SUMMARY_MODEL = os.getenv("CODEX_SUMMARY_MODEL", "gpt-5.6-terra")
+CODEX_TRANSLATION_MODEL = os.getenv("CODEX_TRANSLATION_MODEL", "gpt-5.6-luna")
+
+
+@dataclass(frozen=True)
+class ProviderProfile:
+    name: str
+    display_name: str
+    api_style: str
+    auth_type: str
+    model_attr: str
+    summary_model_attr: str
+    translation_model_attr: str
+    api_key_attr: str | None = None
+    base_url_attr: str | None = None
+    azure_endpoint: bool = False
+
+
+PROVIDER_PROFILES = {
+    profile.name: profile
+    for profile in (
+        ProviderProfile("openai", "OpenAI API", "responses", "api_key", "OPENAI_MODEL", "OPENAI_SUMMARY_MODEL", "OPENAI_TRANSLATION_MODEL", "OPENAI_API_KEY"),
+        ProviderProfile("azure", "Azure OpenAI", "responses", "api_key", "AZURE_MODEL", "AZURE_SUMMARY_MODEL", "AZURE_TRANSLATION_MODEL", "AZURE_API_KEY", "AZURE_ENDPOINT", True),
+        ProviderProfile("openrouter", "OpenRouter", "responses", "api_key", "OPENROUTER_MODEL", "OPENROUTER_SUMMARY_MODEL", "OPENROUTER_TRANSLATION_MODEL", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL"),
+        ProviderProfile("gemini", "Google Gemini", "chat", "api_key", "GEMINI_MODEL", "GEMINI_SUMMARY_MODEL", "GEMINI_TRANSLATION_MODEL", "GEMINI_API_KEY", "GEMINI_BASE_URL"),
+        ProviderProfile("codex_subscription", "Codex (ChatGPT subscription)", "codex_app_server", "managed_login", "CODEX_MODEL", "CODEX_SUMMARY_MODEL", "CODEX_TRANSLATION_MODEL"),
+        ProviderProfile("kiro", "Kiro Gateway", "chat", "api_key", "KIRO_MODEL", "KIRO_SUMMARY_MODEL", "KIRO_TRANSLATION_MODEL", "KIRO_API_KEY", "KIRO_BASE_URL"),
+    )
 }
+PROVIDERS = {name: profile.display_name for name, profile in PROVIDER_PROFILES.items()}
 
 
 class LLMServiceError(RuntimeError):
@@ -48,27 +92,17 @@ class LLMServiceError(RuntimeError):
 
 def _get_client(provider: str | None = None, model: str | None = None, http_client: Any = None):
     provider = provider or LLM_PROVIDER
-    if provider == "azure":
-        return AsyncOpenAI(
-            base_url=_normalize_azure_base_url(AZURE_ENDPOINT),
-            api_key=AZURE_API_KEY,
-            http_client=http_client,
-        ), model or AZURE_MODEL, "responses"
-    if provider == "kiro":
-        return AsyncOpenAI(
-            base_url=_normalize_base_url(KIRO_BASE_URL),
-            api_key=KIRO_API_KEY,
-            http_client=http_client,
-        ), model or KIRO_MODEL, "chat"
-    if provider == "openai":
-        return AsyncOpenAI(api_key=OPENAI_API_KEY, http_client=http_client), model or OPENAI_MODEL, "responses"
-    if provider == "openrouter":
-        return AsyncOpenAI(
-            base_url=_normalize_base_url(OPENROUTER_BASE_URL),
-            api_key=OPENROUTER_API_KEY,
-            http_client=http_client,
-        ), model or OPENROUTER_MODEL, "responses"
-    raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
+    profile = get_provider_profile(provider)
+    if profile.api_style == "codex_app_server":
+        raise ValueError("Codex subscription uses the app-server adapter, not AsyncOpenAI")
+    kwargs: dict[str, Any] = {
+        "api_key": globals().get(profile.api_key_attr or "", ""),
+        "http_client": http_client,
+    }
+    if profile.base_url_attr:
+        base_url = str(globals().get(profile.base_url_attr, ""))
+        kwargs["base_url"] = _normalize_azure_base_url(base_url) if profile.azure_endpoint else _normalize_base_url(base_url)
+    return AsyncOpenAI(**kwargs), model or get_model(provider), profile.api_style
 
 
 def _normalize_azure_base_url(endpoint: str) -> str:
@@ -94,58 +128,117 @@ def _normalize_base_url(endpoint: str) -> str:
 
 def get_model(provider: str | None = None) -> str:
     provider = provider or LLM_PROVIDER
-    if provider == "azure":
-        return AZURE_MODEL
-    if provider == "kiro":
-        return KIRO_MODEL
-    if provider == "openai":
-        return OPENAI_MODEL
-    if provider == "openrouter":
-        return OPENROUTER_MODEL
-    return ""
+    profile = PROVIDER_PROFILES.get(provider)
+    return str(globals().get(profile.model_attr, "")) if profile else ""
 
 
 def set_model(provider: str, model: str) -> None:
-    global AZURE_MODEL, KIRO_MODEL, OPENAI_MODEL, OPENROUTER_MODEL
-    if provider == "azure":
-        AZURE_MODEL = model
-    elif provider == "kiro":
-        KIRO_MODEL = model
-    elif provider == "openai":
-        OPENAI_MODEL = model
-    elif provider == "openrouter":
-        OPENROUTER_MODEL = model
+    profile = PROVIDER_PROFILES.get(provider)
+    if profile:
+        globals()[profile.model_attr] = model
+
+
+def get_task_model(provider: str | None, task: str) -> str:
+    provider = provider or LLM_PROVIDER
+    profile = PROVIDER_PROFILES.get(provider)
+    if profile and task in {"summary", "translation"}:
+        attr = profile.summary_model_attr if task == "summary" else profile.translation_model_attr
+        return str(globals().get(attr, ""))
+    return get_model(provider)
+
+
+def set_task_model(provider: str, task: str, model: str) -> None:
+    profile = PROVIDER_PROFILES.get(provider)
+    if not profile or task not in {"summary", "translation"}:
+        return
+    attr = profile.summary_model_attr if task == "summary" else profile.translation_model_attr
+    globals()[attr] = model
+    if task == "summary":
+        # Keep the legacy/default model aligned with the summary model for callers
+        # that do not yet pass an explicit task model.
+        set_model(provider, model)
+
+
+def get_provider_profile(provider: str | None = None) -> ProviderProfile:
+    provider = provider or LLM_PROVIDER
+    try:
+        return PROVIDER_PROFILES[provider]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported LLM_PROVIDER: {provider}") from exc
 
 
 def has_api_key(provider: str | None = None) -> bool:
     provider = provider or LLM_PROVIDER
-    if provider == "azure":
-        return bool(AZURE_API_KEY)
-    if provider == "kiro":
-        return bool(KIRO_API_KEY)
-    if provider == "openai":
-        return bool(OPENAI_API_KEY)
-    if provider == "openrouter":
-        return bool(OPENROUTER_API_KEY)
-    return False
+    profile = PROVIDER_PROFILES.get(provider)
+    return bool(profile and profile.api_key_attr and globals().get(profile.api_key_attr))
 
 
 def set_api_key(provider: str, api_key: str) -> bool:
-    global AZURE_API_KEY, KIRO_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY
     api_key = api_key.strip()
     if not api_key:
         return False
-    if provider == "azure":
-        AZURE_API_KEY = api_key
-    elif provider == "kiro":
-        KIRO_API_KEY = api_key
-    elif provider == "openai":
-        OPENAI_API_KEY = api_key
-    elif provider == "openrouter":
-        OPENROUTER_API_KEY = api_key
-    else:
+    profile = PROVIDER_PROFILES.get(provider)
+    if not profile or not profile.api_key_attr:
         return False
+    globals()[profile.api_key_attr] = api_key
     return True
+
+
+def get_azure_connection() -> dict[str, str]:
+    return {"endpoint": AZURE_ENDPOINT, "region": AZURE_REGION}
+
+
+def set_azure_connection(endpoint: str, region: str) -> bool:
+    endpoint = endpoint.strip().rstrip("/")
+    region = region.strip()
+    if not endpoint or not endpoint.startswith(("https://", "http://")):
+        return False
+    globals()["AZURE_ENDPOINT"] = endpoint
+    globals()["AZURE_REGION"] = region
+    return True
+
+
+async def get_auth_status(provider: str | None = None) -> dict[str, Any]:
+    profile = get_provider_profile(provider)
+    if profile.auth_type == "api_key":
+        return {"available": True, "connected": has_api_key(profile.name), "auth_mode": "api_key"}
+    from app.codex_provider import CodexProviderError, get_codex_client
+
+    client = get_codex_client()
+    if not client.available:
+        return {"available": False, "connected": False, "error": "Codex 실행 파일을 찾을 수 없습니다."}
+    try:
+        return await client.account_status()
+    except CodexProviderError as exc:
+        return {"available": False, "connected": False, "error": str(exc)}
+
+
+async def start_managed_login(provider: str, mode: str = "chatgpt") -> dict[str, Any]:
+    profile = get_provider_profile(provider)
+    if profile.auth_type != "managed_login":
+        raise LLMServiceError("이 provider는 관리형 로그인을 지원하지 않습니다.")
+    from app.codex_provider import get_codex_client
+
+    return await get_codex_client().start_login(mode)
+
+
+async def logout_managed_provider(provider: str) -> None:
+    profile = get_provider_profile(provider)
+    if profile.auth_type != "managed_login":
+        return
+    from app.codex_provider import get_codex_client
+
+    await get_codex_client().logout()
+
+
+async def list_available_models(provider: str | None = None) -> list[dict[str, Any]]:
+    profile = get_provider_profile(provider)
+    if profile.api_style != "codex_app_server":
+        model = get_model(profile.name)
+        return [{"id": model, "display_name": model, "is_default": True}] if model else []
+    from app.codex_provider import get_codex_client
+
+    return await get_codex_client().list_models()
 
 
 async def _chat(
@@ -155,8 +248,13 @@ async def _chat(
     model: str | None = None,
 ) -> str:
     provider = provider or LLM_PROVIDER
-    client, resolved_model, api_style = _get_client(provider=provider, model=model)
+    resolved_model = model or get_model(provider)
     try:
+        if get_provider_profile(provider).api_style == "codex_app_server":
+            from app.codex_provider import get_codex_client
+
+            return await get_codex_client().run_prompt(prompt, system=system, model=resolved_model)
+        client, resolved_model, api_style = _get_client(provider=provider, model=resolved_model)
         if api_style == "responses":
             return await _call_responses(client, resolved_model, prompt, system)
         return await _call_chat_completions(client, resolved_model, prompt, system)
@@ -241,12 +339,14 @@ async def translate_paragraphs(
     skip_count: number of already-translated paragraphs to skip.
     existing_ko: previously translated paragraphs to prepend.
     """
+    provider = provider or LLM_PROVIDER
+    model = model or get_task_model(provider, "translation")
     try:
         entries = json.loads(transcript_json)
     except (json.JSONDecodeError, TypeError):
         return ""
 
-    paragraphs = _merge(entries, 30)
+    paragraphs = merge_transcript_entries(entries)
 
     system = (
         "You are a translator. Translate the given English text to natural Korean. "
@@ -275,6 +375,8 @@ async def translate_paragraphs(
 
 async def summarize(transcript_json: str, provider: str | None = None, model: str | None = None) -> tuple[str, str]:
     """Generate Korean summary from transcript."""
+    provider = provider or LLM_PROVIDER
+    model = model or get_task_model(provider, "summary")
     try:
         entries = json.loads(transcript_json)
     except (json.JSONDecodeError, TypeError):
@@ -315,22 +417,3 @@ async def summarize(transcript_json: str, provider: str | None = None, model: st
         short = result[:500]
 
     return short, structured
-
-
-def _merge(entries: list[dict], interval: int) -> list[dict]:
-    if not entries:
-        return []
-    paragraphs = []
-    current_start = entries[0]["start"]
-    current_texts = []
-    for entry in entries:
-        if (entry["start"] - current_start >= interval
-                and current_texts
-                and current_texts[-1].rstrip()[-1:] in ".?!"):
-            paragraphs.append({"start": current_start, "text": " ".join(current_texts)})
-            current_start = entry["start"]
-            current_texts = []
-        current_texts.append(entry["text"])
-    if current_texts:
-        paragraphs.append({"start": current_start, "text": " ".join(current_texts)})
-    return paragraphs

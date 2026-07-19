@@ -1,0 +1,33 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      UV_PROJECT_ENVIRONMENT: .venv
+      DB_PATH: data/test-ci.db
+      DB_BACKUP_DIR: data/test-backups
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync locked dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run tests
+        run: uv run python -m pytest -q

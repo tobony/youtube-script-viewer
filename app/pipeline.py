@@ -3,8 +3,9 @@
 import asyncio
 import json
 import logging
-from app.db import update_analysis, get_analysis
+from app.db import activate_analysis, update_analysis, get_analysis
 from app.youtube import TranscriptFetchError, get_metadata, get_transcript_with_language
+from app.transcript import merge_transcript_entries
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +33,32 @@ async def _worker():
         if len(job) == 2:
             job_type, analysis_id = job
             llm_provider = None
-            llm_model = None
-        else:
+            summary_model = None
+            translation_model = None
+        elif len(job) == 4:
             job_type, analysis_id, llm_provider, llm_model = job
+            summary_model = llm_model
+            translation_model = llm_model
+        else:
+            job_type, analysis_id, llm_provider, summary_model, translation_model = job
         global _current_id, _current_task
         _current_id = analysis_id
         try:
             if job_type == "full":
                 _current_task = asyncio.current_task()
-                await run_pipeline(analysis_id, llm_provider=llm_provider, llm_model=llm_model)
+                await run_pipeline(
+                    analysis_id,
+                    llm_provider=llm_provider,
+                    summary_model=summary_model,
+                    translation_model=translation_model,
+                )
             elif job_type == "resume_translate":
                 _current_task = asyncio.current_task()
-                await _resume_translate(analysis_id, llm_provider=llm_provider, llm_model=llm_model)
+                await _resume_translate(
+                    analysis_id,
+                    llm_provider=llm_provider,
+                    translation_model=translation_model,
+                )
         except asyncio.CancelledError:
             await update_analysis(analysis_id, status="failed", error_message="Stopped by user")
         except Exception as e:
@@ -54,19 +69,46 @@ async def _worker():
             _queue.task_done()
 
 
-def start_pipeline(analysis_id: str, llm_provider: str | None = None, llm_model: str | None = None):
+def start_pipeline(
+    analysis_id: str,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    summary_model: str | None = None,
+    translation_model: str | None = None,
+):
     _ensure_worker()
-    asyncio.ensure_future(_enqueue("full", analysis_id, llm_provider, llm_model))
+    asyncio.ensure_future(
+        _enqueue(
+            "full",
+            analysis_id,
+            llm_provider,
+            summary_model or llm_model,
+            translation_model or llm_model,
+        )
+    )
 
 
-def start_resume_translate(analysis_id: str, llm_provider: str | None = None, llm_model: str | None = None):
+def start_resume_translate(
+    analysis_id: str,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    translation_model: str | None = None,
+):
     _ensure_worker()
-    asyncio.ensure_future(_enqueue("resume_translate", analysis_id, llm_provider, llm_model))
+    asyncio.ensure_future(
+        _enqueue("resume_translate", analysis_id, llm_provider, None, translation_model or llm_model)
+    )
 
 
-async def _enqueue(job_type: str, analysis_id: str, llm_provider: str | None = None, llm_model: str | None = None):
+async def _enqueue(
+    job_type: str,
+    analysis_id: str,
+    llm_provider: str | None = None,
+    summary_model: str | None = None,
+    translation_model: str | None = None,
+):
     await update_analysis(analysis_id, status="waiting")
-    await _queue.put((job_type, analysis_id, llm_provider, llm_model))
+    await _queue.put((job_type, analysis_id, llm_provider, summary_model, translation_model))
 
 
 async def stop_pipeline(analysis_id: str) -> bool:
@@ -98,7 +140,15 @@ def is_running(analysis_id: str) -> bool:
     return _current_id == analysis_id
 
 
-async def run_pipeline(analysis_id: str, llm_provider: str | None = None, llm_model: str | None = None):
+async def run_pipeline(
+    analysis_id: str,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    summary_model: str | None = None,
+    translation_model: str | None = None,
+):
+    summary_model = summary_model or llm_model
+    translation_model = translation_model or llm_model
     try:
         await update_analysis(analysis_id, status="fetching")
         row = await _stage_fetch(analysis_id)
@@ -117,7 +167,7 @@ async def run_pipeline(analysis_id: str, llm_provider: str | None = None, llm_mo
 
             try:
                 await update_analysis(analysis_id, status="summarizing")
-                short, structured = await summarize(transcript, provider=llm_provider, model=llm_model)
+                short, structured = await summarize(transcript, provider=llm_provider, model=summary_model)
                 await update_analysis(analysis_id, summary_short=short, summary_structured=structured)
             except LLMServiceError as e:
                 await update_analysis(analysis_id, status="failed", error_message=str(e)[:1000])
@@ -126,7 +176,8 @@ async def run_pipeline(analysis_id: str, llm_provider: str | None = None, llm_mo
                 logger.warning(f"Summarize failed for {analysis_id}: {e}")
 
             if row.get("transcript_lang") == "ko":
-                await update_analysis(analysis_id, transcript_ko=_copy_transcript_as_paragraphs(transcript))
+                # Korean source text does not need a second translated copy.
+                await update_analysis(analysis_id, transcript_ko=None)
             else:
                 try:
                     await update_analysis(analysis_id, status="translating")
@@ -138,7 +189,7 @@ async def run_pipeline(analysis_id: str, llm_provider: str | None = None, llm_mo
                         transcript,
                         on_progress=on_translate_progress,
                         provider=llm_provider,
-                        model=llm_model,
+                        model=translation_model,
                     )
                     await update_analysis(analysis_id, transcript_ko=transcript_ko)
                 except LLMServiceError as e:
@@ -148,6 +199,7 @@ async def run_pipeline(analysis_id: str, llm_provider: str | None = None, llm_mo
                     logger.warning(f"Translate failed for {analysis_id}: {e}")
 
         await update_analysis(analysis_id, status="completed")
+        await activate_analysis(analysis_id)
         logger.info(f"Pipeline completed: {analysis_id}")
 
     except asyncio.CancelledError:
@@ -157,7 +209,13 @@ async def run_pipeline(analysis_id: str, llm_provider: str | None = None, llm_mo
         await update_analysis(analysis_id, status="failed", error_message=str(e)[:1000])
 
 
-async def _resume_translate(analysis_id: str, llm_provider: str | None = None, llm_model: str | None = None):
+async def _resume_translate(
+    analysis_id: str,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    translation_model: str | None = None,
+):
+    translation_model = translation_model or llm_model
     from app.llm import LLMServiceError, translate_paragraphs
 
     try:
@@ -165,6 +223,11 @@ async def _resume_translate(analysis_id: str, llm_provider: str | None = None, l
         transcript = row.get("transcript", "")
         transcript_ko = row.get("transcript_ko", "")
         if not transcript:
+            return
+
+        if row.get("transcript_lang") == "ko":
+            await update_analysis(analysis_id, transcript_ko=None, status="completed")
+            await activate_analysis(analysis_id)
             return
 
         existing_ko = []
@@ -186,9 +249,10 @@ async def _resume_translate(analysis_id: str, llm_provider: str | None = None, l
             skip_count=skip_count,
             existing_ko=existing_ko,
             provider=llm_provider,
-            model=llm_model,
+            model=translation_model,
         )
         await update_analysis(analysis_id, transcript_ko=result, status="completed")
+        await activate_analysis(analysis_id)
     except asyncio.CancelledError:
         raise
     except LLMServiceError as e:
@@ -236,23 +300,7 @@ def _copy_transcript_as_paragraphs(transcript_json: str, interval: int = 30) -> 
         entries = json.loads(transcript_json)
     except (json.JSONDecodeError, TypeError):
         return ""
-    if not entries:
-        return ""
-
-    paragraphs = []
-    current_start = entries[0]["start"]
-    current_texts = []
-    for entry in entries:
-        if (entry["start"] - current_start >= interval
-                and current_texts
-                and current_texts[-1].rstrip()[-1:] in ".?!"):
-            paragraphs.append({"start": current_start, "text": " ".join(current_texts)})
-            current_start = entry["start"]
-            current_texts = []
-        current_texts.append(entry["text"])
-    if current_texts:
-        paragraphs.append({"start": current_start, "text": " ".join(current_texts)})
-    return json.dumps(paragraphs, ensure_ascii=False)
+    return json.dumps(merge_transcript_entries(entries), ensure_ascii=False)
 
 
 def _leading_completed_translations(entries: list[dict]) -> list[dict]:

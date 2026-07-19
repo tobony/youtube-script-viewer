@@ -8,11 +8,15 @@ class AnalyzeRequest(BaseModel):
     force: bool = False
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+    summary_model: Optional[str] = None
+    translation_model: Optional[str] = None
 
 
 class ResumeTranslateRequest(BaseModel):
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+    summary_model: Optional[str] = None
+    translation_model: Optional[str] = None
 
 
 class AnalysisResponse(BaseModel):
@@ -34,5 +38,9 @@ class AnalysisResponse(BaseModel):
     transcript_ko: Optional[str] = None
     status: str = "pending"
     error_message: Optional[str] = None
+    revision_number: int = 1
+    parent_analysis_id: Optional[str] = None
+    is_active: bool = True
+    deleted_at: Optional[str] = None
     created_at: str = ""
     updated_at: str = ""

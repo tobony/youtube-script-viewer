@@ -4,7 +4,14 @@ from fastapi import APIRouter, HTTPException
 
 from app.models import AnalyzeRequest, AnalysisResponse, ResumeTranslateRequest
 from app.youtube import extract_video_id
-from app.db import create_analysis, get_analysis, get_by_video_id, list_analyses, delete_analysis, update_analysis
+from app.db import (
+    create_analysis,
+    create_analysis_revision,
+    get_analysis,
+    get_by_video_id,
+    list_analyses,
+    delete_analysis,
+)
 from app.pipeline import start_pipeline, stop_pipeline, start_resume_translate, is_running
 
 router = APIRouter(prefix="/api")
@@ -33,29 +40,32 @@ async def analyze(req: AnalyzeRequest):
     ):
         return existing
     if existing:
-        row = await update_analysis(
-            existing["id"],
-            url=req.url,
-            llm_enabled=1 if req.llm_enabled else 0,
-            transcript=None,
-            transcript_lang=None,
-            summary_short=None,
-            summary_structured=None,
-            transcript_ko=None,
-            error_message=None,
-            status="pending",
+        row = await create_analysis_revision(
+            existing["id"], mode="full", llm_enabled=req.llm_enabled
         )
-        start_pipeline(row["id"], llm_provider=req.llm_provider, llm_model=req.llm_model)
+        start_pipeline(
+            row["id"],
+            llm_provider=req.llm_provider,
+            llm_model=req.llm_model,
+            summary_model=req.summary_model,
+            translation_model=req.translation_model,
+        )
         return row
 
     row = await create_analysis(video_id=video_id, url=req.url, llm_enabled=req.llm_enabled)
-    start_pipeline(row["id"], llm_provider=req.llm_provider, llm_model=req.llm_model)
+    start_pipeline(
+        row["id"],
+        llm_provider=req.llm_provider,
+        llm_model=req.llm_model,
+        summary_model=req.summary_model,
+        translation_model=req.translation_model,
+    )
     return row
 
 
 @router.get("/analyses", response_model=list[AnalysisResponse])
-async def get_list(limit: int = 20, offset: int = 0):
-    return await list_analyses(limit=limit, offset=offset)
+async def get_list(limit: int = 20, offset: int = 0, q: str | None = None):
+    return await list_analyses(limit=limit, offset=offset, search=q)
 
 
 @router.get("/analyses/{analysis_id}", response_model=AnalysisResponse)
@@ -91,13 +101,16 @@ async def resume_translate(analysis_id: str, req: ResumeTranslateRequest | None 
         raise HTTPException(status_code=400, detail="No transcript")
     if is_running(analysis_id):
         raise HTTPException(status_code=400, detail="Already running")
-    await update_analysis(analysis_id, status="waiting", error_message=None)
+    revision = await create_analysis_revision(analysis_id, mode="translation")
+    if not revision:
+        raise HTTPException(status_code=404, detail="Not found")
     start_resume_translate(
-        analysis_id,
+        revision["id"],
         llm_provider=req.llm_provider if req else None,
         llm_model=req.llm_model if req else None,
+        translation_model=req.translation_model if req else None,
     )
-    return {"ok": True}
+    return {"ok": True, "analysis_id": revision["id"]}
 
 
 def _is_transient_failure_in_cooldown(row: dict) -> bool:

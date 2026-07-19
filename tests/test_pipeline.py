@@ -5,16 +5,24 @@ import pytest
 
 os.environ["DB_PATH"] = "data/test_pipeline.db"
 
+import app.db as db_module
 from app.db import create_analysis, get_analysis, init_db, update_analysis
 from app.pipeline import _resume_translate, run_pipeline
+
+TEST_DB_PATH = "data/test_pipeline.db"
 
 
 @pytest.fixture(autouse=True)
 async def setup_db():
+    previous_path = db_module.DB_PATH
+    db_module.DB_PATH = TEST_DB_PATH
+    if os.path.exists(TEST_DB_PATH):
+        os.remove(TEST_DB_PATH)
     await init_db()
     yield
-    if os.path.exists("data/test_pipeline.db"):
-        os.remove("data/test_pipeline.db")
+    if os.path.exists(TEST_DB_PATH):
+        os.remove(TEST_DB_PATH)
+    db_module.DB_PATH = previous_path
 
 
 @pytest.mark.asyncio
@@ -90,12 +98,49 @@ async def test_run_pipeline_uses_job_llm_snapshot():
         patch("app.llm.summarize", summarize),
         patch("app.llm.translate_paragraphs", translate),
     ):
-        await run_pipeline(row["id"], llm_provider="openai", llm_model="gpt-test")
+        await run_pipeline(
+            row["id"],
+            llm_provider="openai",
+            summary_model="gpt-summary",
+            translation_model="gpt-translation",
+        )
 
-    summarize.assert_awaited_once_with(transcript, provider="openai", model="gpt-test")
+    summarize.assert_awaited_once_with(transcript, provider="openai", model="gpt-summary")
     translate.assert_awaited_once()
     assert translate.await_args.kwargs["provider"] == "openai"
-    assert translate.await_args.kwargs["model"] == "gpt-test"
+    assert translate.await_args.kwargs["model"] == "gpt-translation"
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_leaves_translation_blank_for_korean_source():
+    row = await create_analysis(
+        video_id="ko-video",
+        url="https://www.youtube.com/watch?v=ko-video",
+        llm_enabled=True,
+    )
+    transcript = '[{"start": 0, "text": "한국어 원문입니다."}]'
+    fetched = {
+        **row,
+        "title": "한국어 영상",
+        "error_message": None,
+        "transcript": transcript,
+        "transcript_lang": "ko",
+        "llm_enabled": 1,
+    }
+    summarize = AsyncMock(return_value=("요약", "구조화 요약"))
+    translate = AsyncMock()
+
+    with (
+        patch("app.pipeline._stage_fetch", return_value=fetched),
+        patch("app.llm.summarize", summarize),
+        patch("app.llm.translate_paragraphs", translate),
+    ):
+        await run_pipeline(row["id"])
+
+    translate.assert_not_awaited()
+    updated = await get_analysis(row["id"])
+    assert updated["transcript_ko"] is None
+    assert updated["status"] == "completed"
 
 
 @pytest.mark.asyncio

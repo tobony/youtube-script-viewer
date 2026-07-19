@@ -1,0 +1,4 @@
+interface:
+  display_name: "Safe Viewer Maintenance"
+  short_description: "Protect user data while changing the viewer"
+  default_prompt: "Use $safe-youtube-viewer-maintenance to implement and verify this repository change safely."
