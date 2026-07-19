@@ -11,7 +11,26 @@ from app.db import get_analysis, list_analyses
 from app.transcript import merge_transcript_entries
 
 API_BASE = f"http://localhost:{os.getenv('APP_PORT', '8080')}"
+GITHUB_REPO_URL = "https://github.com/tobony/youtube-script-viewer"
 logger = logging.getLogger(__name__)
+
+GITHUB_ICON_CSS = r"""
+.vpi-social-github {
+    display: inline-block;
+    width: 1.25rem;
+    height: 1.25rem;
+    flex: none;
+    background-color: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.72 1.27 3.39.97.1-.75.4-1.27.74-1.56-2.57-.3-5.27-1.29-5.27-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.16 1.18a10.95 10.95 0 0 1 5.75 0c2.19-1.49 3.16-1.18 3.16-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.41-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z'/%3E%3C/svg%3E") no-repeat center / contain;
+    mask: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.72 1.27 3.39.97.1-.75.4-1.27.74-1.56-2.57-.3-5.27-1.29-5.27-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.16 1.18a10.95 10.95 0 0 1 5.75 0c2.19-1.49 3.16-1.18 3.16-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.41-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z'/%3E%3C/svg%3E") no-repeat center / contain;
+}
+.github-header-only { display: none !important; }
+.github-menu-only { display: flex !important; }
+@media (min-width: 760px) {
+    .github-header-only { display: inline-flex !important; }
+    .github-menu-only { display: none !important; }
+}
+"""
 
 
 def _bold_to_html(text: str) -> str:
@@ -80,7 +99,29 @@ def _step_index(status: str) -> int:
     return -1  # pending
 
 
+def _github_link_classes(placement: str) -> str:
+    """Return responsive classes for the GitHub link placement."""
+    if placement == "header":
+        return "github-header-only no-underline text-inherit items-center justify-center w-10 h-10 rounded-full"
+    if placement == "menu":
+        return "no-underline text-inherit items-center gap-2 py-2"
+    raise ValueError(f"Unsupported GitHub link placement: {placement}")
+
+
+def _render_github_link(placement: str) -> None:
+    with ui.link(target=GITHUB_REPO_URL, new_tab=True).classes(
+        _github_link_classes(placement)
+    ).props('aria-label="GitHub Repository" title="GitHub Repository" rel="noopener noreferrer"'):
+        ui.element("span").classes("vpi-social-github").props('aria-hidden="true"')
+        if placement == "menu":
+            ui.label("GitHub Repository").classes("text-sm")
+        else:
+            ui.tooltip("GitHub Repository")
+
+
 def setup_ui():
+    ui.add_head_html(f"<style>{GITHUB_ICON_CSS}</style>", shared=True)
+
     @ui.page("/")
     async def main_page():
         client = context.client
@@ -101,6 +142,7 @@ def setup_ui():
                     ui.toggle({"list": "☰", "grid": "▦"}, value="grid",
                               on_change=lambda e: _set_layout(e.value)).props("dense")
                     _render_llm_settings_menu(llm)
+                    _render_github_link("header")
 
             with ui.row().classes("w-full gap-4 items-center flex-wrap sm:flex-nowrap"):
                 with ui.row().classes("w-full sm:w-auto items-center gap-2 flex-[2_1_28rem] flex-nowrap"):
@@ -225,6 +267,7 @@ def setup_ui():
                     llm_switch.on_value_change(lambda e: setattr(pipeline, "llm_enabled", e.value))
                     ui.button(icon="light_mode", on_click=lambda: dark.set_value(not dark.value)).props("flat round")
                     _render_llm_settings_menu(llm)
+                    _render_github_link("header")
             content_area = ui.column().classes("w-full")
             render_state = {
                 "ready": False,
@@ -705,7 +748,9 @@ def _current_llm_payload(llm) -> dict:
 
 
 def _render_llm_settings_menu(llm):
-    with ui.button(icon="menu").props("flat round"):
+    with ui.button(icon="settings").props(
+        'flat round aria-label="LLM Settings" title="LLM Settings"'
+    ):
         with ui.menu().classes("p-4 max-h-[calc(100vh-2rem)] overflow-y-auto"):
             with ui.column().classes("gap-3 w-80"):
                 ui.label("Settings").classes("text-base font-bold")
@@ -853,6 +898,9 @@ def _render_llm_settings_menu(llm):
 
                 render_model_controls(llm.LLM_PROVIDER)
                 render_auth_controls(llm.LLM_PROVIDER)
+                with ui.column().classes("github-menu-only w-full gap-1"):
+                    ui.separator()
+                    _render_github_link("menu")
 
 
 def _render_codex_auth_controls(llm, provider: str):

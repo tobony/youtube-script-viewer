@@ -1,6 +1,13 @@
 import json
 
-from app.ui import _translation_progress, _update_translation_controls
+import pytest
+
+from app.ui import (
+    GITHUB_REPO_URL,
+    _github_link_classes,
+    _translation_progress,
+    _update_translation_controls,
+)
 
 
 class FakeElement:
@@ -19,6 +26,14 @@ class FakeElement:
     def classes(self, add=None, *, remove=None):
         self.added_classes = add
         self.removed_classes = remove
+
+
+def test_github_link_uses_repository_url_and_responsive_placements():
+    assert GITHUB_REPO_URL == "https://github.com/tobony/youtube-script-viewer"
+    assert "github-header-only" in _github_link_classes("header")
+    assert "github-menu-only" not in _github_link_classes("menu")
+    with pytest.raises(ValueError):
+        _github_link_classes("footer")
 
 
 def test_korean_source_has_no_translation_progress():

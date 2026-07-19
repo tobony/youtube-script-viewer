@@ -1,0 +1,217 @@
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+WARNING:  WatchFiles detected changes in 'app\llm.py'. Reloading...
+WARNING:  WatchFiles detected changes in 'app\ui.py'. Reloading...
+WARNING:  WatchFiles detected changes in 'app\llm.py'. Reloading...
+WARNING:  WatchFiles detected changes in 'tests\test_llm.py'. Reloading...
+WARNING:  WatchFiles detected changes in 'tests\test_llm.py'. Reloading...
+WARNING:  WatchFiles detected changes in 'app\llm.py'. Reloading...
+WARNING:  WatchFiles detected changes in 'app\ui.py'. Reloading...
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 131, in _main
+    prepare(preparation_data)
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 246, in prepare
+    _fixup_main_from_path(data['init_main_from_path'])
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 297, in _fixup_main_from_path
+    main_content = runpy.run_path(main_path,
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen runpy>", line 287, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "R:\youtube-script-viewer\main.py", line 5, in <module>
+    from nicegui import ui
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\__init__.py", line 1, in <module>
+    from . import elements, html, run, ui
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\html.py", line 3, in <module>
+    from .element import Element
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\element.py", line 11, in <module>
+    from . import core, events, helpers, json, storage
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\core.py", line 6, in <module>
+    from socketio import AsyncServer
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\socketio\__init__.py", line 1, in <module>
+    from .client import Client
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\socketio\client.py", line 3, in <module>
+    import engineio
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\engineio\__init__.py", line 5, in <module>
+    from .async_client import AsyncClient
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\engineio\async_client.py", line 9, in <module>
+    import aiohttp
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\__init__.py", line 6, in <module>
+    from .client import (
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\client.py", line 40, in <module>
+    from . import hdrs, http, payload
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\http.py", line 7, in <module>
+    from .http_parser import (
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\http_parser.py", line 28, in <module>
+    from .base_protocol import BaseProtocol
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\base_protocol.py", line 5, in <module>
+    from .helpers import set_exception
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\helpers.py", line 65, in <module>
+    IS_MACOS = platform.system() == "Darwin"
+               ^^^^^^^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 987, in system
+    return uname().system
+           ^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 922, in uname
+    release, version, csd, ptype = win32_ver()
+                                   ^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 450, in win32_ver
+    version, csd, ptype, is_client = _win32_ver(version, csd, ptype)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 388, in _win32_ver
+    (version, product_type, ptype, spmajor, spminor)  = _wmi_query(
+                                                        ^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 327, in _wmi_query
+    data = _wmi.exec_query("SELECT {} FROM {}".format(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+WARNING:  WatchFiles detected changes in 'tests\test_llm.py'. Reloading...
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 131, in _main
+    prepare(preparation_data)
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 246, in prepare
+    _fixup_main_from_path(data['init_main_from_path'])
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 297, in _fixup_main_from_path
+    main_content = runpy.run_path(main_path,
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen runpy>", line 287, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "R:\youtube-script-viewer\main.py", line 5, in <module>
+    from nicegui import ui
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\__init__.py", line 1, in <module>
+    from . import elements, html, run, ui
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\html.py", line 3, in <module>
+    from .element import Element
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\element.py", line 11, in <module>
+    from . import core, events, helpers, json, storage
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\core.py", line 6, in <module>
+    from socketio import AsyncServer
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\socketio\__init__.py", line 1, in <module>
+    from .client import Client
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\socketio\client.py", line 3, in <module>
+    import engineio
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\engineio\__init__.py", line 5, in <module>
+    from .async_client import AsyncClient
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\engineio\async_client.py", line 9, in <module>
+    import aiohttp
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\__init__.py", line 6, in <module>
+    from .client import (
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\client.py", line 40, in <module>
+    from . import hdrs, http, payload
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\http.py", line 7, in <module>
+    from .http_parser import (
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\http_parser.py", line 28, in <module>
+    from .base_protocol import BaseProtocol
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\base_protocol.py", line 5, in <module>
+    from .helpers import set_exception
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\helpers.py", line 65, in <module>
+    IS_MACOS = platform.system() == "Darwin"
+               ^^^^^^^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 987, in system
+    return uname().system
+           ^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 922, in uname
+    release, version, csd, ptype = win32_ver()
+                                   ^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 450, in win32_ver
+    version, csd, ptype, is_client = _win32_ver(version, csd, ptype)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 388, in _win32_ver
+    (version, product_type, ptype, spmajor, spminor)  = _wmi_query(
+                                                        ^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 327, in _wmi_query
+    data = _wmi.exec_query("SELECT {} FROM {}".format(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+WARNING:  WatchFiles detected changes in 'app\pipeline.py'. Reloading...
+WARNING:  WatchFiles detected changes in 'tests\test_pipeline.py', 'app\ui.py'. Reloading...
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 131, in _main
+    prepare(preparation_data)
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 246, in prepare
+    _fixup_main_from_path(data['init_main_from_path'])
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\multiprocessing\spawn.py", line 297, in _fixup_main_from_path
+    main_content = runpy.run_path(main_path,
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen runpy>", line 287, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "R:\youtube-script-viewer\main.py", line 5, in <module>
+    from nicegui import ui
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\__init__.py", line 1, in <module>
+    from . import elements, html, run, ui
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\html.py", line 3, in <module>
+    from .element import Element
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\element.py", line 11, in <module>
+    from . import core, events, helpers, json, storage
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\nicegui\core.py", line 6, in <module>
+    from socketio import AsyncServer
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\socketio\__init__.py", line 1, in <module>
+    from .client import Client
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\socketio\client.py", line 3, in <module>
+    import engineio
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\engineio\__init__.py", line 5, in <module>
+    from .async_client import AsyncClient
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\engineio\async_client.py", line 9, in <module>
+    import aiohttp
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\__init__.py", line 6, in <module>
+    from .client import (
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\client.py", line 40, in <module>
+    from . import hdrs, http, payload
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\http.py", line 7, in <module>
+    from .http_parser import (
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\http_parser.py", line 28, in <module>
+    from .base_protocol import BaseProtocol
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\base_protocol.py", line 5, in <module>
+    from .helpers import set_exception
+  File "R:\youtube-script-viewer\.venv\Lib\site-packages\aiohttp\helpers.py", line 65, in <module>
+    IS_MACOS = platform.system() == "Darwin"
+               ^^^^^^^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 987, in system
+    return uname().system
+           ^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 922, in uname
+    release, version, csd, ptype = win32_ver()
+                                   ^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 450, in win32_ver
+    version, csd, ptype, is_client = _win32_ver(version, csd, ptype)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 388, in _win32_ver
+    (version, product_type, ptype, spmajor, spminor)  = _wmi_query(
+                                                        ^^^^^^^^^^^
+  File "C:\Users\b660\AppData\Roaming\uv\python\cpython-3.12.10-windows-x86_64-none\Lib\platform.py", line 327, in _wmi_query
+    data = _wmi.exec_query("SELECT {} FROM {}".format(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
+Summarize failed: Missing credentials. Please pass an `api_key`, `workload_identity`, `admin_api_key`, or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` environment variable.
+Timer cancelled because client is not connected after 60.0 seconds
+Timer cancelled because client is not connected after 60.0 seconds
