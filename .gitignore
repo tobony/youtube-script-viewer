@@ -5,8 +5,13 @@
 data/
 __pycache__/
 *.pyc
+*.log
 .env
-.codex-devserver.*.log
+.vscode/
+screenshots/
+*.tmp.png
+*.tmp.jpg
+*.tmp.jpeg
 backend/.venv/
 backend/data/
 ref/

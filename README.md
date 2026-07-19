@@ -410,21 +410,4 @@ gateway의 설치, 로그인, 지원 모델과 사용 조건은 해당 프로젝
 지원 모델 목록을 이 README에 고정하지 않는 이유는 gateway와 계정 정책에 따라
 변경될 수 있기 때문입니다.
 
-## 오픈소스 공개 전 확인
 
-이 저장소를 private에서 public으로 바꾸기 전에 다음을 확인해야 합니다.
-
-- 저장소에 적용할 라이선스를 결정하고 `LICENSE` 파일 추가
-- `CONTRIBUTING.md`, `SECURITY.md`, 필요 시 `CODE_OF_CONDUCT.md` 추가
-- 현재 파일뿐 아니라 Git 전체 이력과 Actions 로그에서 API key, 토큰, 개인 경로,
-  사용자 데이터가 노출되지 않았는지 검사하고, 노출된 credential은 폐기·재발급
-- `sample_data/youtube_scripts.db`의 영상 자막·번역·썸네일 등 재배포 권리를
-  확인하거나 합성 데이터로 교체
-- 실행 로그와 임시 스크린샷이 커밋되지 않도록 `.gitignore`와 staged 파일 확인
-- 깨끗한 환경에서 Docker Compose 설치 절차와 전체 테스트 재검증
-- GitHub의
-  [저장소 공개 전 영향](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility)을
-  확인: 코드뿐 아니라 Actions 실행 이력과 로그도 공개될 수 있음
-
-현재 저장소에는 명시적인 `LICENSE`가 없습니다. 라이선스 파일을 추가하기 전에는
-제3자가 이 코드를 자유롭게 사용·수정·배포할 수 있다고 안내해서는 안 됩니다.
