@@ -182,69 +182,147 @@ def setup_ui():
                 else:
                     ui.notify(f"오류: {r.json().get('detail', 'Unknown')}", type="negative")
 
-            _last_data = [None]
+            history_state = {
+                "structure_key": None,
+                "content_key": None,
+                "rendered": False,
+                "cards": {},
+                "layout": None,
+                "query": None,
+            }
+            history_refresh_lock = asyncio.Lock()
 
             async def apply_search():
                 search_state["query"] = (search_input.value or "").strip()
-                _last_data[0] = None
                 await refresh_history()
 
             async def clear_search():
                 if search_state["query"]:
                     search_state["query"] = ""
-                    _last_data[0] = None
                     await refresh_history()
 
             search_input.on("keydown.enter", lambda: apply_search())
             search_input.on("clear", lambda: clear_search())
 
+            async def _capture_history_anchor():
+                """Capture the visible card and scroll position before a structural update."""
+                try:
+                    return await ui.run_javascript(
+                        """(() => {
+                            const cards = Array.from(document.querySelectorAll('[data-analysis-id]'));
+                            const visible = cards.find((card) => {
+                                const rect = card.getBoundingClientRect();
+                                return rect.bottom > 0 && rect.top < window.innerHeight;
+                            });
+                            return {
+                                scrollY: window.scrollY,
+                                id: visible?.getAttribute('data-analysis-id') ?? null,
+                                top: visible?.getBoundingClientRect().top ?? null,
+                            };
+                        })()"""
+                    )
+                except Exception:
+                    logger.debug("Could not capture history scroll position", exc_info=True)
+                    return None
+
+            async def _restore_history_anchor(anchor):
+                if not isinstance(anchor, dict):
+                    return
+                scroll_y = anchor.get("scrollY")
+                if not isinstance(scroll_y, (int, float)):
+                    return
+                await ui.run_javascript(
+                    f"""requestAnimationFrame(() => {{
+                        const oldY = {json.dumps(scroll_y)};
+                        const oldTop = {json.dumps(anchor.get("top"))};
+                        const anchorId = {json.dumps(anchor.get("id"))};
+                        let targetY = oldY;
+                        if (anchorId !== null && Number.isFinite(oldTop)) {{
+                            const card = Array.from(document.querySelectorAll('[data-analysis-id]'))
+                                .find((element) => element.getAttribute('data-analysis-id') === anchorId);
+                            if (card) targetY += card.getBoundingClientRect().top - oldTop;
+                        }}
+                        window.scrollTo(0, Math.max(0, targetY));
+                    }})"""
+                )
+
             async def refresh_history():
                 if not _is_client_alive(client):
                     history_timer.cancel()
                     return
-                items = await list_analyses(limit=50, search=search_state["query"])
 
-                # Only re-render if data changed
-                data_key = json.dumps({
-                    "layout": layout_mode["value"],
-                    "query": search_state["query"],
-                    "items": [
-                        (i.get("id"), i.get("status"), (i.get("summary_short") or "")[:20], len(i.get("transcript_ko") or ""))
-                        for i in items
-                    ],
-                })
-                if data_key == _last_data[0]:
-                    return
-                _last_data[0] = data_key
+                # A timer tick and a user-triggered refresh can overlap. Serializing
+                # them prevents two structural renders from racing each other.
+                async with history_refresh_lock:
+                    items = await list_analyses(limit=50, search=search_state["query"])
+                    structure_key = _history_structure_key(
+                        layout_mode["value"], search_state["query"], items
+                    )
+                    content_key = _history_content_key(items)
 
-                history_container.clear()
-                with history_container:
-                    if search_state["query"]:
-                        ui.label(f'"{search_state["query"]}" 검색 결과 {len(items)}개').classes(
-                            "text-sm opacity-70 mb-3"
-                        )
-                    if not items:
-                        with ui.column().classes("w-full items-center justify-center gap-2 py-16 text-center"):
-                            ui.icon("search_off").classes("text-5xl opacity-40")
-                            if search_state["query"]:
-                                ui.label(f'"{search_state["query"]}"와 일치하는 영상이 없습니다.').classes(
-                                    "text-lg font-medium"
-                                )
-                                ui.label("다른 검색어를 입력하거나 검색어를 지워보세요.").classes(
-                                    "text-sm opacity-60"
-                                )
-                            else:
-                                ui.label("아직 분석한 영상이 없습니다.").classes("text-lg font-medium")
-                    elif layout_mode["value"] == "grid":
-                        with ui.element("div").classes(
-                            "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 w-full gap-4"
-                        ):
-                            for item in items:
-                                _render_grid_card(item)
-                    else:
-                        with ui.column().classes("w-full gap-3"):
-                            for item in items:
-                                _render_card(item)
+                    if structure_key == history_state["structure_key"]:
+                        if content_key == history_state["content_key"]:
+                            return
+                        # Progress, status, and summary changes only update the
+                        # controls already attached to each card. The card DOM is
+                        # deliberately kept stable while a job is running.
+                        anchor = await _capture_history_anchor()
+                        for item in items:
+                            controls = history_state["cards"].get(str(item.get("id")))
+                            if controls:
+                                _update_history_card(controls, item)
+                        history_state["content_key"] = content_key
+                        if anchor:
+                            await _restore_history_anchor(anchor)
+                        return
+
+                    preserve_anchor = (
+                        history_state["rendered"]
+                        and history_state["layout"] == layout_mode["value"]
+                        and history_state["query"] == search_state["query"]
+                    )
+                    anchor = await _capture_history_anchor() if preserve_anchor else None
+
+                    history_container.clear()
+                    cards = {}
+                    with history_container:
+                        if search_state["query"]:
+                            ui.label(f'"{search_state["query"]}" 검색 결과 {len(items)}개').classes(
+                                "text-sm opacity-70 mb-3"
+                            )
+                        if not items:
+                            with ui.column().classes("w-full items-center justify-center gap-2 py-16 text-center"):
+                                ui.icon("search_off").classes("text-5xl opacity-40")
+                                if search_state["query"]:
+                                    ui.label(f'"{search_state["query"]}"와 일치하는 영상이 없습니다.').classes(
+                                        "text-lg font-medium"
+                                    )
+                                    ui.label("다른 검색어를 입력하거나 검색어를 지워보세요.").classes(
+                                        "text-sm opacity-60"
+                                    )
+                                else:
+                                    ui.label("아직 분석한 영상이 없습니다.").classes("text-lg font-medium")
+                        elif layout_mode["value"] == "grid":
+                            with ui.element("div").classes(
+                                "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 w-full gap-4"
+                            ):
+                                for item in items:
+                                    cards[str(item.get("id"))] = _render_grid_card(item)
+                        else:
+                            with ui.column().classes("w-full gap-3"):
+                                for item in items:
+                                    cards[str(item.get("id"))] = _render_card(item)
+
+                    history_state.update({
+                        "structure_key": structure_key,
+                        "content_key": content_key,
+                        "rendered": True,
+                        "cards": cards,
+                        "layout": layout_mode["value"],
+                        "query": search_state["query"],
+                    })
+                    if anchor:
+                        await _restore_history_anchor(anchor)
 
             initial_history_timer = ui.timer(0.1, refresh_history, once=True)
             history_timer = ui.timer(3.0, refresh_history)
@@ -632,19 +710,148 @@ def _copy(text: str):
     ui.notify("복사됨", type="positive", position="bottom", timeout=1000)
 
 
+def _history_structure_key(layout: str, query: str, items: list[dict]) -> str:
+    """Return the parts of a history render that require new DOM nodes.
+
+    Status, summary, and progressive translation are intentionally excluded.
+    Those values are updated through the controls returned by the card renderers.
+    A change in thumbnail/overlay presence is structural because it changes the
+    card layout, so it is allowed to trigger one anchored structural render.
+    """
+    return json.dumps(
+        {
+            "layout": layout,
+            "query": query,
+            "items": [
+                {
+                    "id": str(item.get("id")),
+                    "thumbnail": bool(item.get("thumbnail")),
+                    "like_count": bool(item.get("like_count")) if layout == "grid" else False,
+                    "view_count": bool(item.get("view_count")) if layout == "grid" else False,
+                    "duration": bool(item.get("duration_seconds")) if layout == "grid" else False,
+                }
+                for item in items
+            ],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _history_content_key(items: list[dict]) -> str:
+    """Return card values that can be changed without changing card structure."""
+    return json.dumps(
+        [
+            {
+                "id": str(item.get("id")),
+                "status": item.get("status", "pending"),
+                "summary": item.get("summary_short") or "",
+                "title": item.get("title") or item.get("url") or "",
+                "channel": item.get("channel") or "",
+                "duration": item.get("duration_seconds") or 0,
+                "translation_progress": _translation_progress(item),
+            }
+            for item in items
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _history_step_label(item: dict) -> str:
+    status = item.get("status", "pending")
+    if status in ("completed", "failed"):
+        return ""
+    labels = {
+        "pending": "대기중",
+        "waiting": "⏳ 대기중",
+        "fetching": "📥 추출중",
+        "summarizing": "📝 요약중",
+        "translating": "🌐 번역중",
+    }
+    label = labels.get(status, "")
+    if status == "translating":
+        done, total = _translation_progress(item)
+        if total:
+            label = f"🌐 번역 {done}/{total}"
+    return label
+
+
+def _status_color(status: str) -> str:
+    return {
+        "waiting": "grey",
+        "pending": "grey",
+        "fetching": "blue",
+        "summarizing": "orange",
+        "translating": "purple",
+        "completed": "green",
+        "failed": "red",
+    }.get(status, "grey")
+
+
+def _update_history_card(controls: dict, item: dict) -> None:
+    """Update a history card without replacing its DOM node."""
+    status = item.get("status", "pending")
+    badge = controls.get("status_badge")
+    if badge:
+        badge.set_text(status)
+        badge.props(f"color={_status_color(status)}")
+
+    workflow_label = controls.get("workflow_label")
+    if workflow_label:
+        step_label = _history_step_label(item)
+        workflow_label.set_text(step_label)
+        workflow_label.set_visibility(bool(step_label))
+
+    summary_label = controls.get("summary_label")
+    if summary_label:
+        summary = item.get("summary_short") or ""
+        summary_label.set_text(summary)
+        summary_label.set_visibility(bool(summary))
+
+    title_label = controls.get("title_label")
+    if title_label:
+        title_label.set_text(item.get("title") or item.get("url") or "")
+
+    channel_label = controls.get("channel_label")
+    if channel_label:
+        channel = item.get("channel") or ""
+        channel_label.set_text(channel)
+        channel_label.set_visibility(bool(channel))
+
+    duration_label = controls.get("duration_label")
+    if duration_label:
+        duration = item.get("duration_seconds") or 0
+        duration_label.set_text(f"{duration // 60}분" if duration else "")
+        duration_label.set_visibility(bool(duration))
+
+
 def _render_card(item: dict):
-    with ui.card().classes("w-full cursor-pointer").on("click", lambda i=item: ui.navigate.to(f"/detail/{i['id']}")):
+    with ui.card() as card:
+        card.classes("w-full cursor-pointer")
+        card.props(f"data-analysis-id={json.dumps(str(item.get('id')))}")
+        card.on("click", lambda i=item: ui.navigate.to(f"/detail/{i['id']}"))
         with ui.row().classes("w-full gap-4 items-center"):
             if item.get("thumbnail"):
                 ui.image(item["thumbnail"]).classes("w-32 h-20 object-cover rounded")
             with ui.column().classes("flex-grow"):
-                ui.label(item.get("title") or item["url"]).classes("font-bold text-base")
+                title_label = ui.label(item.get("title") or item.get("url") or "").classes(
+                    "font-bold text-base"
+                )
                 with ui.row().classes("gap-2 text-sm opacity-70"):
-                    if item.get("channel"):
-                        ui.label(item["channel"])
-                    if item.get("duration_seconds"):
-                        ui.label(f"{item['duration_seconds'] // 60}분")
-            _status_badge(item.get("status", "pending"))
+                    channel_label = ui.label(item.get("channel") or "")
+                    channel_label.set_visibility(bool(item.get("channel")))
+                    duration = item.get("duration_seconds") or 0
+                    duration_label = ui.label(f"{duration // 60}분" if duration else "")
+                    duration_label.set_visibility(bool(duration))
+            status_badge = _status_badge(item.get("status", "pending"))
+    return {
+        "root": card,
+        "status_badge": status_badge,
+        "title_label": title_label,
+        "channel_label": channel_label,
+        "duration_label": duration_label,
+    }
 
 
 def _fmt_count(n: int) -> str:
@@ -656,7 +863,9 @@ def _fmt_count(n: int) -> str:
 
 
 def _render_grid_card(item: dict):
-    with ui.card().classes("w-full relative group"):
+    with ui.card() as card:
+        card.classes("w-full relative group")
+        card.props(f"data-analysis-id={json.dumps(str(item.get('id')))}")
         # Delete button (top-right, visible on hover)
         async def delete_card():
             with ui.dialog() as dialog, ui.card():
@@ -692,42 +901,35 @@ def _render_grid_card(item: dict):
                     with ui.element("div").classes("absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-0.5 rounded-full"):
                         ui.label(f"⏱ {_fmt_duration(dur)}")
         with ui.column().classes("p-2 gap-1"):
-            ui.link(item.get("title") or item["url"], target=f"/detail/{item['id']}").classes("font-bold text-sm line-clamp-2 no-underline text-inherit")
+            title_label = ui.link(item.get("title") or item.get("url") or "", target=f"/detail/{item['id']}").classes("font-bold text-sm line-clamp-2 no-underline text-inherit")
             with ui.row().classes("gap-2 text-xs opacity-70"):
-                if item.get("channel"):
-                    ui.label(item["channel"])
+                channel_label = ui.label(item.get("channel") or "")
+                channel_label.set_visibility(bool(item.get("channel")))
             with ui.row().classes("items-center gap-2"):
                 if item.get("url"):
                     ui.button("▶ YouTube", on_click=lambda e, u=item["url"]: ui.run_javascript(f'window.open("{u}", "_blank")') or e.stop_propagation()).props("outline color=red size=sm").classes("py-0")
-                _status_badge(item.get("status", "pending"))
+                status_badge = _status_badge(item.get("status", "pending"))
                 # Show workflow step when in progress
-                status = item.get("status", "pending")
-                if status not in ("completed", "failed"):
-                    step_labels = {"pending": "대기중", "waiting": "⏳ 대기중", "fetching": "📥 추출중", "summarizing": "📝 요약중", "translating": "🌐 번역중"}
-                    label = step_labels.get(status, "")
-                    if status == "translating":
-                        done, total = _translation_progress(item)
-                        if total:
-                            label = f"🌐 번역 {done}/{total}"
-                    ui.label(label).classes("text-xs opacity-70")
+                workflow_label = ui.label(_history_step_label(item)).classes("text-xs opacity-70")
+                workflow_label.set_visibility(bool(_history_step_label(item)))
             # Summary preview (4 lines max with tooltip)
-            if item.get("summary_short"):
-                summary = item["summary_short"]
-                with ui.label(summary).classes("text-sm opacity-70 line-clamp-4 mt-1"):
+            summary = item.get("summary_short") or ""
+            with ui.label(summary).classes("text-sm opacity-70 line-clamp-4 mt-1") as summary_label:
+                summary_label.set_visibility(bool(summary))
+                if summary:
                     ui.tooltip(summary).props('max-width="400px"').classes("text-sm")
+    return {
+        "root": card,
+        "status_badge": status_badge,
+        "workflow_label": workflow_label,
+        "summary_label": summary_label,
+        "title_label": title_label,
+        "channel_label": channel_label,
+    }
 
 
 def _status_badge(status: str):
-    colors = {
-        "waiting": "grey",
-        "pending": "grey",
-        "fetching": "blue",
-        "summarizing": "orange",
-        "translating": "purple",
-        "completed": "green",
-        "failed": "red",
-    }
-    ui.badge(status, color=colors.get(status, "grey"))
+    return ui.badge(status, color=_status_color(status))
 
 
 def _is_transient_youtube_error(error_message: str | None) -> bool:

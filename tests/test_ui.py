@@ -5,6 +5,7 @@ import pytest
 from app.ui import (
     GITHUB_REPO_URL,
     _github_link_classes,
+    _history_structure_key,
     _translation_progress,
     _update_translation_controls,
 )
@@ -54,6 +55,35 @@ def test_non_korean_source_reports_translation_progress():
     }
 
     assert _translation_progress(item) == (1, 1)
+
+
+def test_history_structure_key_ignores_progress_only_changes():
+    base = {
+        "id": "analysis-1",
+        "status": "translating",
+        "summary_short": "요약",
+        "transcript_ko": "[첫 문단]",
+        "thumbnail": "https://example.test/thumb.jpg",
+    }
+    progressed = {
+        **base,
+        "status": "completed",
+        "summary_short": "요약이 갱신됨",
+        "transcript_ko": "[첫 문단, 둘째 문단]",
+    }
+
+    assert _history_structure_key("grid", "", [base]) == _history_structure_key(
+        "grid", "", [progressed]
+    )
+
+
+def test_history_structure_key_changes_when_card_shape_changes():
+    without_thumbnail = {"id": "analysis-1", "status": "fetching"}
+    with_thumbnail = {**without_thumbnail, "thumbnail": "https://example.test/thumb.jpg"}
+
+    assert _history_structure_key("grid", "", [without_thumbnail]) != _history_structure_key(
+        "grid", "", [with_thumbnail]
+    )
 
 
 def test_translation_controls_update_existing_nodes_in_place():
