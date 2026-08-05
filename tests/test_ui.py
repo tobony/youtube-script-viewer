@@ -4,9 +4,12 @@ import pytest
 
 from app.ui import (
     GITHUB_REPO_URL,
+    _detail_summary_key,
+    _detail_transcript_key,
     _github_link_classes,
     _history_structure_key,
     _translation_progress,
+    _update_resume_button_visibility,
     _update_translation_controls,
 )
 
@@ -116,3 +119,46 @@ def test_translation_controls_update_existing_nodes_in_place():
     assert paragraphs[1]["label"].text == "두 번째 번역"
     assert paragraphs[2]["label"].text == "번역 대기중"
     assert paragraphs[2]["copy_button"].visible is False
+
+
+def test_detail_progress_keys_exclude_incremental_translation_data():
+    base = {
+        "summary_short": "초기 요약",
+        "summary_structured": "",
+        "transcript": json.dumps([{"start": 0, "text": "English"}]),
+        "transcript_lang": "en",
+        "duration_seconds": 60,
+        "transcript_ko": json.dumps([{"start": 0, "text": "첫 번역"}], ensure_ascii=False),
+    }
+    progressed = {
+        **base,
+        "transcript_ko": json.dumps(
+            [{"start": 0, "text": "갱신된 번역"}], ensure_ascii=False
+        ),
+    }
+
+    assert _detail_summary_key(base) == _detail_summary_key(progressed)
+    assert _detail_transcript_key(base) == _detail_transcript_key(progressed)
+
+
+def test_resume_translation_action_is_visible_only_for_partial_non_korean_data():
+    button = FakeElement()
+    partial = {
+        "status": "completed",
+        "transcript_lang": "en",
+        "transcript": json.dumps([{"start": 0, "text": "English"}]),
+        "transcript_ko": None,
+    }
+    _update_resume_button_visibility(partial, button)
+    assert button.visible is True
+
+    complete = {
+        **partial,
+        "transcript_ko": json.dumps([{"start": 0, "text": "번역"}], ensure_ascii=False),
+    }
+    _update_resume_button_visibility(complete, button)
+    assert button.visible is False
+
+    korean_source = {**partial, "transcript_lang": "ko"}
+    _update_resume_button_visibility(korean_source, button)
+    assert button.visible is False

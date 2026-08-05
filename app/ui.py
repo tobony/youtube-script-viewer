@@ -184,6 +184,7 @@ def setup_ui():
 
             history_state = {
                 "structure_key": None,
+                "item_structure_keys": {},
                 "content_key": None,
                 "rendered": False,
                 "cards": {},
@@ -276,6 +277,51 @@ def setup_ui():
                             await _restore_history_anchor(anchor)
                         return
 
+                    # Metadata such as a thumbnail, duration, or view count
+                    # can arrive after the card was first rendered.  The item
+                    # set and ordering are unchanged in that case, so rebuild
+                    # only the affected card contents instead of clearing the
+                    # entire history container (which flashes the whole page).
+                    current_item_ids = [str(item.get("id")) for item in items]
+                    rendered_item_ids = list(history_state["cards"].keys())
+                    same_items = (
+                        history_state["rendered"]
+                        and history_state["layout"] == layout_mode["value"]
+                        and history_state["query"] == search_state["query"]
+                        and rendered_item_ids == current_item_ids
+                        and all(
+                            history_state["cards"].get(item_id)
+                            for item_id in current_item_ids
+                        )
+                    )
+                    if same_items:
+                        anchor = await _capture_history_anchor()
+                        next_item_structure_keys = {}
+                        for item in items:
+                            item_id = str(item.get("id"))
+                            next_item_structure_keys[item_id] = _history_item_structure_key(
+                                layout_mode["value"], item
+                            )
+                            controls = history_state["cards"][item_id]
+                            if (
+                                next_item_structure_keys[item_id]
+                                != history_state["item_structure_keys"].get(item_id)
+                            ):
+                                _rebuild_history_card(
+                                    controls, item, layout_mode["value"]
+                                )
+                            _update_history_card(controls, item)
+                        history_state.update(
+                            {
+                                "structure_key": structure_key,
+                                "item_structure_keys": next_item_structure_keys,
+                                "content_key": content_key,
+                            }
+                        )
+                        if anchor:
+                            await _restore_history_anchor(anchor)
+                        return
+
                     preserve_anchor = (
                         history_state["rendered"]
                         and history_state["layout"] == layout_mode["value"]
@@ -315,6 +361,12 @@ def setup_ui():
 
                     history_state.update({
                         "structure_key": structure_key,
+                        "item_structure_keys": {
+                            str(item.get("id")): _history_item_structure_key(
+                                layout_mode["value"], item
+                            )
+                            for item in items
+                        },
                         "content_key": content_key,
                         "rendered": True,
                         "cards": cards,
@@ -349,11 +401,31 @@ def setup_ui():
             content_area = ui.column().classes("w-full")
             render_state = {
                 "ready": False,
+                "data": None,
                 "translation": None,
                 "progress_label": None,
+                "progress_container": None,
+                "status_badge": None,
+                "stop_button": None,
+                "title_label": None,
+                "channel_label": None,
+                "duration_label": None,
+                "error_label": None,
+                "summary_container": None,
+                "summary_key": None,
+                "transcript_container": None,
+                "transcript_key": None,
+                "resume_button": None,
             }
 
             async def load_detail(preserve_scroll: bool = False):
+                """Render the detail page for the initial load or an explicit action.
+
+                Polling uses ``_update_detail_in_place`` below instead.  Keeping
+                this full render for navigation and user actions makes the
+                initial page construction straightforward while ensuring that a
+                background status transition never clears the whole page.
+                """
                 scroll_y = None
                 if preserve_scroll and render_state["ready"]:
                     try:
@@ -368,26 +440,33 @@ def setup_ui():
                     return
 
                 status = data.get("status", "pending")
+                duration = data.get("duration_seconds") or 0
+                render_state["data"] = data
                 with content_area:
                     # Title
-                    ui.label(data.get("title") or "처리 중...").classes("text-2xl font-bold")
-                    duration = data.get("duration_seconds") or 0
+                    title_label = ui.label(data.get("title") or "처리 중...").classes(
+                        "text-2xl font-bold"
+                    )
                     with ui.row().classes("gap-4 text-sm opacity-70 items-center"):
                         if data.get("url"):
                             ui.button("▶ YouTube", on_click=lambda: ui.run_javascript(f'window.open("{data["url"]}", "_blank")')).props("outline color=red size=sm").classes("py-0")
-                        if data.get("channel"):
-                            ui.label(f"📺 {data['channel']}")
-                        if duration:
-                            ui.label(f"⏱ {duration // 60}분 {duration % 60}초")
-                        _status_badge(status)
+                        channel_label = ui.label("")
+                        channel_label.set_visibility(False)
+                        duration_label = ui.label("")
+                        duration_label.set_visibility(False)
+                        status_badge = _status_badge(status)
                         ui.space()
-                        if status != "completed":
-                            async def stop_analysis():
-                                async with httpx.AsyncClient() as c2:
-                                    await c2.post(f"{API_BASE}/api/analyses/{analysis_id}/stop")
-                                ui.notify("중단됨", type="warning")
-                                await load_detail()
-                            ui.button("Stop", on_click=stop_analysis, color="red").props("outline size=sm")
+
+                        async def stop_analysis():
+                            async with httpx.AsyncClient() as c2:
+                                await c2.post(f"{API_BASE}/api/analyses/{analysis_id}/stop")
+                            ui.notify("중단됨", type="warning")
+                            await load_detail()
+
+                        stop_button = ui.button(
+                            "Stop", on_click=stop_analysis, color="red"
+                        ).props("outline size=sm")
+
                         async def regenerate():
                             if _is_transient_youtube_error(data.get("error_message")):
                                 ui.notify(data["error_message"], type="warning")
@@ -419,79 +498,181 @@ def setup_ui():
                             dialog.open()
                         ui.button("다시 생성", on_click=regenerate, color="orange").props("outline size=sm")
 
-                        # Resume translate button (when translation is incomplete)
-                        is_korean_source = str(data.get("transcript_lang") or "").lower().startswith("ko")
-                        if not is_korean_source:
-                            done, total = _translation_progress(data)
-                            if total and done < total and status in ("completed", "failed", "translating"):
-                                async def resume_translate():
-                                    async with httpx.AsyncClient() as c2:
-                                        r = await c2.post(
-                                            f"{API_BASE}/api/analyses/{analysis_id}/resume-translate",
-                                            json=_current_llm_payload(llm),
-                                        )
-                                    if r.status_code == 200:
-                                        ui.notify(f"번역 이어하기 시작 ({done}/{total})", type="positive")
-                                        revision_id = r.json().get("analysis_id")
-                                        if revision_id:
-                                            ui.navigate.to(f"/detail/{revision_id}")
-                                        else:
-                                            timer.activate()
-                                            await load_detail()
-                                    else:
-                                        ui.notify(f"오류: {r.json().get('detail', '')}", type="negative")
-                                ui.button(
-                                    f"🌐 번역 이어하기 ({done}/{total})",
-                                    on_click=resume_translate,
-                                    color="purple",
-                                ).props("outline size=sm")
+                        async def resume_translate():
+                            current_data = render_state.get("data") or data
+                            done, total = _translation_progress(current_data)
+                            async with httpx.AsyncClient() as c2:
+                                r = await c2.post(
+                                    f"{API_BASE}/api/analyses/{analysis_id}/resume-translate",
+                                    json=_current_llm_payload(llm),
+                                )
+                            if r.status_code == 200:
+                                ui.notify(
+                                    f"번역 이어하기 시작 ({done}/{total})", type="positive"
+                                )
+                                revision_id = r.json().get("analysis_id")
+                                if revision_id:
+                                    ui.navigate.to(f"/detail/{revision_id}")
+                                else:
+                                    timer.activate()
+                                    await load_detail()
+                            else:
+                                ui.notify(
+                                    f"오류: {r.json().get('detail', '')}", type="negative"
+                                )
+
+                        resume_button = ui.button(
+                            "🌐 번역 이어하기",
+                            on_click=resume_translate,
+                            color="purple",
+                        ).props("outline size=sm")
 
                     # Error
-                    if data.get("error_message"):
-                        ui.label(f"❌ {data['error_message']}").classes("text-red")
+                    error_label = ui.label("").classes("text-red")
 
                     # Step indicator (show when not completed)
-                    if status not in ("completed", "failed"):
-                        render_state["progress_label"] = _render_steps(status, data)
-                    else:
-                        render_state["progress_label"] = None
+                    with ui.element("div") as progress_container:
+                        if status not in ("completed", "failed"):
+                            render_state["progress_label"] = _render_steps(status, data)
+                        else:
+                            render_state["progress_label"] = None
 
-                    # Progressive rendering based on what's available
-                    has_transcript = bool(data.get("transcript"))
-                    has_summary = bool(data.get("summary_short") or data.get("summary_structured"))
-                    has_ko = bool(data.get("transcript_ko"))
+                    # Keep stable containers for progressive summary/transcript
+                    # updates.  Only these small regions are cleared when their
+                    # own content changes.
+                    summary_container = ui.column().classes("w-full")
+                    _render_summary_content(summary_container, data)
+                    transcript_container = ui.column().classes("w-full")
+                    render_state["translation"] = _render_transcript_content(
+                        transcript_container, data
+                    )
 
-                    # 1. Summary (show when available)
-                    if has_summary:
-                        with ui.card().classes("w-full"):
-                            if data.get("summary_short"):
-                                ui.label(data["summary_short"]).classes("text-base leading-relaxed")
-                            if data.get("summary_structured"):
-                                ui.separator()
-                                ui.markdown(data["summary_structured"]).classes("text-base summary-md")
-                                ui.add_css("""
-                                    .summary-md h1, .summary-md h2, .summary-md h3 {
-                                        font-size: 1rem !important;
-                                        font-weight: 700 !important;
-                                        margin-top: 1em;
-                                        margin-bottom: 0.3em;
-                                    }
-                                """)
-
-                    # 2. Transcript (show as soon as fetching is done)
-                    if has_transcript:
-                        render_state["translation"] = _render_bilingual_transcript(
-                            data.get("transcript"),
-                            data.get("transcript_ko"),
-                            duration,
-                            data.get("transcript_lang"),
-                        )
-                    else:
-                        render_state["translation"] = None
+                render_state.update(
+                    {
+                        "title_label": title_label,
+                        "channel_label": channel_label,
+                        "duration_label": duration_label,
+                        "status_badge": status_badge,
+                        "stop_button": stop_button,
+                        "resume_button": resume_button,
+                        "error_label": error_label,
+                        "progress_container": progress_container,
+                        "summary_container": summary_container,
+                        "summary_key": _detail_summary_key(data),
+                        "transcript_container": transcript_container,
+                        "transcript_key": _detail_transcript_key(data),
+                    }
+                )
+                channel = data.get("channel") or ""
+                channel_label.set_text(f"📺 {channel}" if channel else "")
+                channel_label.set_visibility(bool(channel))
+                duration_label.set_text(
+                    f"⏱ {duration // 60}분 {duration % 60}초" if duration else ""
+                )
+                duration_label.set_visibility(bool(duration))
+                stop_button.set_visibility(status != "completed")
+                error_message = data.get("error_message") or ""
+                error_label.set_text(f"❌ {error_message}" if error_message else "")
+                error_label.set_visibility(bool(error_message))
+                progress_container.set_visibility(status not in ("completed", "failed"))
+                _update_resume_button_visibility(data, resume_button)
 
                 render_state["ready"] = True
                 _last_status[0] = status
                 _last_ko[0] = data.get("transcript_ko") or ""
+                if scroll_y is not None:
+                    await ui.run_javascript(
+                        f"requestAnimationFrame(() => window.scrollTo(0, {json.dumps(scroll_y)}))"
+                    )
+
+            async def _update_detail_in_place(data: dict):
+                """Apply polled changes without replacing the detail page DOM."""
+                if not render_state["ready"]:
+                    await load_detail(preserve_scroll=True)
+                    return
+
+                status = data.get("status", "pending")
+                ko_raw = data.get("transcript_ko") or ""
+                status_changed = status != _last_status[0]
+                ko_updated = ko_raw != _last_ko[0]
+                summary_key = _detail_summary_key(data)
+                transcript_key = _detail_transcript_key(data)
+                summary_changed = summary_key != render_state["summary_key"]
+                transcript_changed = transcript_key != render_state["transcript_key"]
+
+                if not any(
+                    (status_changed, ko_updated, summary_changed, transcript_changed)
+                ):
+                    return
+
+                try:
+                    scroll_y = await ui.run_javascript("window.scrollY")
+                except Exception:
+                    scroll_y = None
+
+                render_state["data"] = data
+                title = data.get("title") or "처리 중..."
+                render_state["title_label"].set_text(title)
+
+                channel = data.get("channel") or ""
+                render_state["channel_label"].set_text(f"📺 {channel}" if channel else "")
+                render_state["channel_label"].set_visibility(bool(channel))
+
+                duration = data.get("duration_seconds") or 0
+                render_state["duration_label"].set_text(
+                    f"⏱ {duration // 60}분 {duration % 60}초" if duration else ""
+                )
+                render_state["duration_label"].set_visibility(bool(duration))
+
+                status_badge = render_state["status_badge"]
+                status_badge.set_text(status)
+                status_badge.props(f"color={_status_color(status)}")
+                render_state["stop_button"].set_visibility(status != "completed")
+
+                error_message = data.get("error_message") or ""
+                render_state["error_label"].set_text(
+                    f"❌ {error_message}" if error_message else ""
+                )
+                render_state["error_label"].set_visibility(bool(error_message))
+
+                # Rebuild the small progress region only when the workflow step
+                # changes.  Translation-count changes update its existing label
+                # so even that region does not flash for every paragraph.
+                if status_changed:
+                    progress_container = render_state["progress_container"]
+                    if status in ("completed", "failed"):
+                        progress_container.clear()
+                        progress_container.set_visibility(False)
+                        render_state["progress_label"] = None
+                    else:
+                        progress_container.clear()
+                        with progress_container:
+                            render_state["progress_label"] = _render_steps(status, data)
+                        progress_container.set_visibility(True)
+                elif ko_updated:
+                    progress_label = render_state["progress_label"]
+                    if progress_label and status == "translating":
+                        done, total = _translation_progress(data)
+                        progress_label.set_text(
+                            f"번역 ({done}/{total})" if total else "번역"
+                        )
+
+                if summary_changed:
+                    _render_summary_content(render_state["summary_container"], data)
+                    render_state["summary_key"] = summary_key
+
+                if transcript_changed:
+                    render_state["translation"] = _render_transcript_content(
+                        render_state["transcript_container"], data
+                    )
+                    render_state["transcript_key"] = transcript_key
+                elif ko_updated and render_state["translation"]:
+                    _update_translation_controls(render_state["translation"], ko_raw)
+
+                _update_resume_button_visibility(data, render_state["resume_button"])
+                _last_status[0] = status
+                _last_ko[0] = ko_raw
+
                 if scroll_y is not None:
                     await ui.run_javascript(
                         f"requestAnimationFrame(() => window.scrollTo(0, {json.dumps(scroll_y)}))"
@@ -511,25 +692,10 @@ def setup_ui():
                 status = data.get("status")
                 ko_raw = data.get("transcript_ko") or ""
 
-                # Only re-render when status changes or new translation data arrives
-                status_changed = status != _last_status[0]
-                ko_updated = ko_raw != _last_ko[0]
-
-                if status_changed:
-                    await load_detail(preserve_scroll=True)
-                elif ko_updated:
-                    controls = render_state["translation"]
-                    if controls:
-                        _update_translation_controls(controls, ko_raw)
-                        progress_label = render_state["progress_label"]
-                        if progress_label and status == "translating":
-                            done, total = _translation_progress(data)
-                            progress_label.set_text(
-                                f"번역 ({done}/{total})" if total else "번역"
-                            )
-                        _last_ko[0] = ko_raw
-                    else:
-                        await load_detail(preserve_scroll=True)
+                # Polling must update existing controls in place.  In
+                # particular, a status transition (summary/translation
+                # completion) must not call content_area.clear().
+                await _update_detail_in_place(data)
 
                 if status in ("completed", "failed"):
                     timer.deactivate()
@@ -705,6 +871,79 @@ def _update_translation_controls(controls: dict, raw_ko: str | None) -> None:
             )
 
 
+def _detail_summary_key(data: dict) -> tuple[str, str]:
+    return (
+        data.get("summary_short") or "",
+        data.get("summary_structured") or "",
+    )
+
+
+def _detail_transcript_key(data: dict) -> tuple[str, str, int]:
+    return (
+        data.get("transcript") or "",
+        data.get("transcript_lang") or "",
+        data.get("duration_seconds") or 0,
+    )
+
+
+def _update_resume_button_visibility(data: dict, button) -> None:
+    """Show the resume action only when a non-Korean translation is partial."""
+    if button is None:
+        return
+    is_korean_source = str(data.get("transcript_lang") or "").lower().startswith("ko")
+    done, total = _translation_progress(data)
+    visible = (
+        not is_korean_source
+        and bool(total)
+        and done < total
+        and data.get("status") in ("completed", "failed", "translating")
+    )
+    button.set_visibility(visible)
+
+
+def _render_summary_content(container, data: dict) -> bool:
+    """Render only the summary region, leaving the detail page DOM intact."""
+    container.clear()
+    has_summary = bool(data.get("summary_short") or data.get("summary_structured"))
+    container.set_visibility(has_summary)
+    if not has_summary:
+        return False
+
+    with container:
+        with ui.card().classes("w-full"):
+            if data.get("summary_short"):
+                ui.label(data["summary_short"]).classes("text-base leading-relaxed")
+            if data.get("summary_structured"):
+                ui.separator()
+                ui.markdown(data["summary_structured"]).classes("text-base summary-md")
+                ui.add_css("""
+                    .summary-md h1, .summary-md h2, .summary-md h3 {
+                        font-size: 1rem !important;
+                        font-weight: 700 !important;
+                        margin-top: 1em;
+                        margin-bottom: 0.3em;
+                    }
+                """)
+    return True
+
+
+def _render_transcript_content(container, data: dict):
+    """Render only the transcript region and return its translation controls."""
+    container.clear()
+    if not data.get("transcript"):
+        container.set_visibility(False)
+        return None
+
+    container.set_visibility(True)
+    with container:
+        return _render_bilingual_transcript(
+            data.get("transcript"),
+            data.get("transcript_ko"),
+            data.get("duration_seconds") or 0,
+            data.get("transcript_lang"),
+        )
+
+
 def _copy(text: str):
     ui.run_javascript(f'navigator.clipboard.writeText({json.dumps(text)})')
     ui.notify("복사됨", type="positive", position="bottom", timeout=1000)
@@ -722,16 +961,22 @@ def _history_structure_key(layout: str, query: str, items: list[dict]) -> str:
         {
             "layout": layout,
             "query": query,
-            "items": [
-                {
-                    "id": str(item.get("id")),
-                    "thumbnail": bool(item.get("thumbnail")),
-                    "like_count": bool(item.get("like_count")) if layout == "grid" else False,
-                    "view_count": bool(item.get("view_count")) if layout == "grid" else False,
-                    "duration": bool(item.get("duration_seconds")) if layout == "grid" else False,
-                }
-                for item in items
-            ],
+            "items": [_history_item_structure_key(layout, item) for item in items],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _history_item_structure_key(layout: str, item: dict) -> str:
+    """Return the card-shape key for one history item."""
+    return json.dumps(
+        {
+            "id": str(item.get("id")),
+            "thumbnail": bool(item.get("thumbnail")),
+            "like_count": bool(item.get("like_count")) if layout == "grid" else False,
+            "view_count": bool(item.get("view_count")) if layout == "grid" else False,
+            "duration": bool(item.get("duration_seconds")) if layout == "grid" else False,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -826,11 +1071,8 @@ def _update_history_card(controls: dict, item: dict) -> None:
         duration_label.set_visibility(bool(duration))
 
 
-def _render_card(item: dict):
-    with ui.card() as card:
-        card.classes("w-full cursor-pointer")
-        card.props(f"data-analysis-id={json.dumps(str(item.get('id')))}")
-        card.on("click", lambda i=item: ui.navigate.to(f"/detail/{i['id']}"))
+def _populate_list_card(card, item: dict):
+    with card:
         with ui.row().classes("w-full gap-4 items-center"):
             if item.get("thumbnail"):
                 ui.image(item["thumbnail"]).classes("w-32 h-20 object-cover rounded")
@@ -854,6 +1096,14 @@ def _render_card(item: dict):
     }
 
 
+def _render_card(item: dict):
+    card = ui.card()
+    card.classes("w-full cursor-pointer")
+    card.props(f"data-analysis-id={json.dumps(str(item.get('id')))}")
+    card.on("click", lambda i=item: ui.navigate.to(f"/detail/{i['id']}"))
+    return _populate_list_card(card, item)
+
+
 def _fmt_count(n: int) -> str:
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
@@ -862,10 +1112,8 @@ def _fmt_count(n: int) -> str:
     return str(n)
 
 
-def _render_grid_card(item: dict):
-    with ui.card() as card:
-        card.classes("w-full relative group")
-        card.props(f"data-analysis-id={json.dumps(str(item.get('id')))}")
+def _populate_grid_card(card, item: dict):
+    with card:
         # Delete button (top-right, visible on hover)
         async def delete_card():
             with ui.dialog() as dialog, ui.card():
@@ -926,6 +1174,26 @@ def _render_grid_card(item: dict):
         "title_label": title_label,
         "channel_label": channel_label,
     }
+
+
+def _render_grid_card(item: dict):
+    card = ui.card()
+    card.classes("w-full relative group")
+    card.props(f"data-analysis-id={json.dumps(str(item.get('id')))}")
+    return _populate_grid_card(card, item)
+
+
+def _rebuild_history_card(controls: dict, item: dict, layout: str) -> None:
+    """Rebuild one card in place when its optional shape changes."""
+    card = controls["root"]
+    card.clear()
+    updated = (
+        _populate_grid_card(card, item)
+        if layout == "grid"
+        else _populate_list_card(card, item)
+    )
+    controls.clear()
+    controls.update(updated)
 
 
 def _status_badge(status: str):
