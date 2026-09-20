@@ -7,6 +7,7 @@ import os
 import re
 from nicegui import ui, app, context
 import httpx
+from app.auth import internal_headers
 from app.db import get_analysis, list_analyses
 from app.transcript import merge_transcript_entries
 
@@ -167,7 +168,7 @@ def setup_ui():
                 if not url:
                     return
                 inp.value = ""
-                async with httpx.AsyncClient() as c:
+                async with httpx.AsyncClient(headers=internal_headers()) as c:
                     r = await c.post(
                         f"{API_BASE}/api/analyze",
                         json={
@@ -458,7 +459,7 @@ def setup_ui():
                         ui.space()
 
                         async def stop_analysis():
-                            async with httpx.AsyncClient() as c2:
+                            async with httpx.AsyncClient(headers=internal_headers()) as c2:
                                 await c2.post(f"{API_BASE}/api/analyses/{analysis_id}/stop")
                             ui.notify("중단됨", type="warning")
                             await load_detail()
@@ -478,7 +479,7 @@ def setup_ui():
                                     ui.button("취소", on_click=dialog.close).props("flat")
                                     async def confirm():
                                         dialog.close()
-                                        async with httpx.AsyncClient() as c2:
+                                        async with httpx.AsyncClient(headers=internal_headers()) as c2:
                                             await c2.post(f"{API_BASE}/api/analyses/{analysis_id}/stop")
                                             response = await c2.post(
                                                 f"{API_BASE}/api/analyze",
@@ -501,7 +502,7 @@ def setup_ui():
                         async def resume_translate():
                             current_data = render_state.get("data") or data
                             done, total = _translation_progress(current_data)
-                            async with httpx.AsyncClient() as c2:
+                            async with httpx.AsyncClient(headers=internal_headers()) as c2:
                                 r = await c2.post(
                                     f"{API_BASE}/api/analyses/{analysis_id}/resume-translate",
                                     json=_current_llm_payload(llm),
@@ -1122,7 +1123,7 @@ def _populate_grid_card(card, item: dict):
                     ui.button("취소", on_click=dialog.close).props("flat")
                     async def confirm_delete():
                         dialog.close()
-                        async with httpx.AsyncClient() as c:
+                        async with httpx.AsyncClient(headers=internal_headers()) as c:
                             await c.delete(f"{API_BASE}/api/analyses/{item['id']}")
                         ui.notify("삭제됨", type="info")
                     ui.button("삭제", on_click=confirm_delete, color="red")

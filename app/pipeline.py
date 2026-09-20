@@ -140,6 +140,13 @@ def is_running(analysis_id: str) -> bool:
     return _current_id == analysis_id
 
 
+def queued_count() -> int:
+    """Number of jobs waiting in the queue (excludes the running job)."""
+    if _queue is None:
+        return 0
+    return _queue.qsize()
+
+
 async def run_pipeline(
     analysis_id: str,
     llm_provider: str | None = None,

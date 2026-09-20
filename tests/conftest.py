@@ -14,6 +14,12 @@ SESSION_TEST_DB_PATH = Path("data/test-suite.db")
 os.environ["DB_PATH"] = str(SESSION_TEST_DB_PATH)
 os.environ["DB_BACKUP_DIR"] = "data/test-backups"
 
+# Auth is off by default so existing suites keep exercising UI-internal API
+# behavior unchanged. Tests that cover the network guard opt in by setting
+# APP_AUTH_TOKEN themselves.
+os.environ.pop("APP_AUTH_TOKEN", None)
+os.environ["APP_AUTH_DISABLED"] = "1"
+
 
 def _assert_not_production_db() -> None:
     import app.db as db_module

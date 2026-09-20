@@ -378,3 +378,79 @@ async def activate_analysis(analysis_id: str) -> Optional[dict]:
     result = await row.fetchone()
     await db.close()
     return dict(result)
+
+
+# ---------------------------------------------------------------------------
+# Agent-facing read helpers.
+#
+# These mirror the WHERE clause of list_analyses exactly. They never return
+# transcript, translation, or structured-summary bodies, so an agent can page
+# through the archive without downloading every stored document. Bodies stay
+# available through get_analysis for explicit single-item requests.
+# ---------------------------------------------------------------------------
+
+SUMMARY_COLUMNS = (
+    "id, video_id, url, title, channel, thumbnail, duration_seconds, "
+    "view_count, like_count, video_lang, llm_enabled, transcript_lang, "
+    "status, error_message, revision_number, is_active, created_at, updated_at, "
+    "(transcript IS NOT NULL AND transcript != '') AS has_transcript, "
+    "(summary_short IS NOT NULL AND summary_short != '') AS has_summary, "
+    "LENGTH(COALESCE(transcript, '')) AS transcript_chars, "
+    "LENGTH(COALESCE(transcript_ko, '')) AS translation_chars"
+)
+
+SEARCHABLE_COLUMNS = (
+    "title",
+    "transcript",
+    "transcript_ko",
+    "summary_short",
+    "summary_structured",
+)
+
+SORTABLE_COLUMNS = frozenset({"created_at", "updated_at"})
+
+
+def _filter_clause(search: str | None) -> tuple[str, list[object]]:
+    """Build the shared active/search predicate used by list and count."""
+    clause = " WHERE is_active = 1 AND deleted_at IS NULL"
+    params: list[object] = []
+    search = (search or "").strip()
+    if search:
+        pattern = f"%{_escape_like(search)}%"
+        clause += " AND (" + " OR ".join(
+            f"LOWER(COALESCE({column}, '')) LIKE LOWER(?) ESCAPE '\\'"
+            for column in SEARCHABLE_COLUMNS
+        ) + ")"
+        params.extend([pattern] * len(SEARCHABLE_COLUMNS))
+    return clause, params
+
+
+async def count_analyses(search: str | None = None) -> int:
+    """Count active, non-deleted rows using the same predicate as list_analyses."""
+    where, params = _filter_clause(search)
+    db = await get_db()
+    cursor = await db.execute(f"SELECT COUNT(*) FROM analyses{where}", params)
+    row = await cursor.fetchone()
+    await db.close()
+    return int(row[0]) if row else 0
+
+
+async def list_analyses_summary(
+    limit: int = 20,
+    offset: int = 0,
+    search: str | None = None,
+    order_by: str = "created_at",
+) -> list[dict]:
+    """List active rows without any large body column."""
+    if order_by not in SORTABLE_COLUMNS:
+        raise ValueError(f"Unsupported order column: {order_by}")
+    where, params = _filter_clause(search)
+    db = await get_db()
+    cursor = await db.execute(
+        f"SELECT {SUMMARY_COLUMNS} FROM analyses{where} "
+        f"ORDER BY {order_by} DESC LIMIT ? OFFSET ?",
+        [*params, limit, offset],
+    )
+    rows = await cursor.fetchall()
+    await db.close()
+    return [dict(row) for row in rows]

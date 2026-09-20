@@ -104,13 +104,24 @@ cp .env.example .env
 
 `.env`에서 사용할 provider의 인증 정보와 모델을 설정한 뒤 실행합니다.
 
+**접근 토큰을 반드시 설정해야 합니다.** 설정하지 않으면 앱이 기동을 거부합니다
+(예전에는 인증 없이 LAN에 열려 있었고 `DELETE`까지 무인증이었습니다).
+
+```bash
+printf 'APP_AUTH_TOKEN=%s\n' "$(openssl rand -hex 32)" >> .env
+```
+
 ```bash
 docker compose up -d --build
 docker compose ps
 docker compose logs -f app
 ```
 
-브라우저에서 <http://localhost:7030>을 엽니다.
+브라우저에서 <http://localhost:7030>을 엽니다. **HTTP Basic 인증 창**이 뜨면
+사용자 이름은 아무 값이나 넣고, 비밀번호에 위 토큰을 붙여넣습니다. 스크립트와
+에이전트는 `Authorization: Bearer <토큰>` 을 씁니다.
+
+`/health` 는 인증에서 면제되므로 컨테이너 헬스체크는 그대로 동작합니다.
 
 ```bash
 # 업데이트 후 다시 빌드
@@ -378,6 +389,22 @@ youtube-script-viewer/
 
 - 영상에 자막이 있는지, 로그인·연령·지역 제한이 없는지 확인합니다.
 - `docker compose logs -f app`에서 원인을 확인합니다.
+
+### 인증 창이 뜨고 들어갈 수 없음
+
+- 브라우저는 **HTTP Basic** 을 씁니다: 사용자 이름은 아무 값, 비밀번호에 `APP_AUTH_TOKEN`.
+- 토큰을 잊었다면 호스트에서 `grep APP_AUTH_TOKEN .env` 로 확인합니다.
+- 토큰을 바꾼 뒤에는 `docker compose up -d --force-recreate` 로 컨테이너를 다시 만듭니다.
+
+### 앱이 기동하지 않고 "Refusing to start without authentication"
+
+토큰이 설정되지 않은 상태입니다. `.env`에 `APP_AUTH_TOKEN` 을 넣거나, 정말로 다른
+기기에서 닿을 수 없는 호스트라면 `APP_AUTH_DISABLED=1` 을 설정합니다.
+
+### 에이전트 API (`/api/agent/v1`) 가 503 을 돌려줌
+
+토큰이 없어 에이전트 표면이 닫힌 상태입니다(fail-closed). `APP_AUTH_TOKEN` 을
+설정하세요. 자세한 내용은 [`docs/agent-api.md`](docs/agent-api.md) 를 봅니다.
 - 반복 요청으로 제한된 경우 잠시 기다린 뒤 다시 시도합니다.
 
 ### DB 복원 요구 또는 무결성 오류
