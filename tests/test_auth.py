@@ -30,6 +30,7 @@ async def setup_db(monkeypatch):
     # conftest disables auth globally so existing suites stay unchanged; each
     # test here chooses its own configuration.
     monkeypatch.delenv("APP_AUTH_DISABLED", raising=False)
+    monkeypatch.delenv("APP_AUTH_BYPASS_IPS", raising=False)
     yield
     if os.path.exists(TEST_DB_PATH):
         os.remove(TEST_DB_PATH)
@@ -181,6 +182,50 @@ async def test_websocket_cookie_does_not_leak_the_token(monkeypatch):
     value = _cookie_value(TOKEN)
     assert TOKEN not in value
     assert len(value) == 64
+
+
+@pytest.mark.asyncio
+async def test_exact_bypass_ip_allows_http_without_cookie(monkeypatch):
+    monkeypatch.setenv("APP_AUTH_TOKEN", TOKEN)
+    monkeypatch.setenv("APP_AUTH_BYPASS_IPS", "100.64.0.10")
+    transport = ASGITransport(app=app, client=("100.64.0.10", 12345))
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/api/analyses")
+    assert r.status_code == 200
+    assert COOKIE_NAME not in r.headers.get("set-cookie", "")
+
+
+@pytest.mark.asyncio
+async def test_bypass_does_not_trust_forwarded_ip(monkeypatch):
+    monkeypatch.setenv("APP_AUTH_TOKEN", TOKEN)
+    monkeypatch.setenv("APP_AUTH_BYPASS_IPS", "100.64.0.10")
+    transport = ASGITransport(app=app, client=("192.168.50.120", 12345))
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/api/analyses", headers={"X-Forwarded-For": "100.64.0.10"})
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_exact_bypass_ip_allows_websocket(monkeypatch):
+    monkeypatch.setenv("APP_AUTH_TOKEN", TOKEN)
+    monkeypatch.setenv("APP_AUTH_BYPASS_IPS", "100.64.0.10")
+    sent: list[dict] = []
+
+    async def inner(scope, receive, send):
+        sent.append({"type": "upgraded"})
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    await LanAuthMiddleware(inner)(
+        {"type": "websocket", "path": "/_nicegui_ws/", "headers": [], "client": ("100.64.0.10", 12345)},
+        receive,
+        send,
+    )
+    assert sent == [{"type": "upgraded"}]
 
 
 @pytest.mark.asyncio

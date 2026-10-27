@@ -53,6 +53,12 @@ genuinely unreachable from other machines.
 `/health` stays exempt from authentication so container and uptime checks keep
 working.
 
+An operator may set `APP_AUTH_BYPASS_IPS` to comma-separated exact peer IPs
+for passwordless HTTP and WebSocket access. The app matches only the direct
+ASGI socket peer, never `X-Forwarded-For`. This grants the listed address the
+same full UI/API access, including destructive routes; only trusted, stable
+Tailscale device addresses should be listed.
+
 ### Why a cookie is involved
 
 Browsers cannot attach custom headers to a WebSocket handshake, and the NiceGUI

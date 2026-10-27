@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
 
@@ -30,6 +31,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 AUTH_TOKEN_ENV = "APP_AUTH_TOKEN"
 AUTH_DISABLED_ENV = "APP_AUTH_DISABLED"
+AUTH_BYPASS_IPS_ENV = "APP_AUTH_BYPASS_IPS"
 REALM = "YouTube Script Viewer"
 COOKIE_NAME = "ytsv_ws_auth"
 
@@ -120,6 +122,35 @@ def _header_ok(scope: Scope, token: str) -> bool:
     return candidate is not None and secrets.compare_digest(candidate, token)
 
 
+def _auth_bypass_ip_ok(scope: Scope) -> bool:
+    """Match the direct ASGI peer against an exact-IP operator allowlist.
+
+    Forwarded headers are intentionally ignored: only the socket peer address
+    supplied by the ASGI server can select this passwordless exception.
+    """
+    client = scope.get("client")
+    if not client or not client[0]:
+        return False
+    try:
+        peer = ipaddress.ip_address(client[0])
+    except ValueError:
+        return False
+    if isinstance(peer, ipaddress.IPv6Address) and peer.ipv4_mapped:
+        peer = peer.ipv4_mapped
+
+    raw_allowlist = os.getenv(AUTH_BYPASS_IPS_ENV, "")
+    for entry in raw_allowlist.split(","):
+        try:
+            allowed = ipaddress.ip_address(entry.strip())
+        except ValueError:
+            continue
+        if isinstance(allowed, ipaddress.IPv6Address) and allowed.ipv4_mapped:
+            allowed = allowed.ipv4_mapped
+        if peer == allowed:
+            return True
+    return False
+
+
 class LanAuthMiddleware:
     """Require the shared token for every HTTP request and websocket upgrade."""
 
@@ -139,6 +170,10 @@ class LanAuthMiddleware:
             return
 
         if (scope.get("path") or "/") in EXEMPT_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        if _auth_bypass_ip_ok(scope):
             await self.app(scope, receive, send)
             return
 

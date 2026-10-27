@@ -15,3 +15,5 @@ screenshots/
 backend/.venv/
 backend/data/
 ref/
+.env.bak*
+data.bak-*/
