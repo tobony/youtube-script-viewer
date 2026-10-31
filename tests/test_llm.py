@@ -244,3 +244,158 @@ async def test_managed_auth_status_reports_unavailable_client(monkeypatch):
 
     assert status["available"] is False
     assert status["connected"] is False
+
+
+# --- Fallback provider -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("attr", "expected"),
+    [
+        ("AZURE_API_KEY", "AZURE_FALLBACK_API_KEY"),
+        ("AZURE_ENDPOINT", "AZURE_FALLBACK_ENDPOINT"),
+        ("AZURE_SUMMARY_MODEL", "AZURE_FALLBACK_SUMMARY_MODEL"),
+        ("OPENROUTER_BASE_URL", "OPENROUTER_FALLBACK_BASE_URL"),
+        ("CODEX_TRANSLATION_MODEL", "CODEX_FALLBACK_TRANSLATION_MODEL"),
+    ],
+)
+def test_fallback_env_name_maps_provider_settings(attr, expected):
+    assert llm._fallback_env_name(attr) == expected
+
+
+def _enable_fallback(monkeypatch, provider="azure"):
+    monkeypatch.setattr(llm, "LLM_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(llm, "LLM_FALLBACK_PROVIDER", provider)
+
+
+def test_fallback_config_reads_provider_twins(monkeypatch):
+    _enable_fallback(monkeypatch)
+    monkeypatch.setenv("AZURE_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("AZURE_FALLBACK_ENDPOINT", "https://fallback.openai.azure.com")
+    monkeypatch.setenv("AZURE_FALLBACK_MODEL", "fallback-default")
+    monkeypatch.setenv("AZURE_FALLBACK_SUMMARY_MODEL", "fallback-summary")
+    monkeypatch.setenv("AZURE_FALLBACK_TRANSLATION_MODEL", "fallback-translation")
+
+    fallback = llm.get_fallback_config()
+
+    assert fallback is not None
+    assert fallback.provider == "azure"
+    assert fallback.api_style == "responses"
+    assert fallback.api_key == "fallback-key"
+    assert fallback.model_for("summary") == "fallback-summary"
+    assert fallback.model_for("translation") == "fallback-translation"
+    assert fallback.model_for() == "fallback-default"
+
+
+def test_fallback_config_is_none_when_disabled(monkeypatch):
+    monkeypatch.setattr(llm, "LLM_FALLBACK_ENABLED", False)
+    monkeypatch.setenv("AZURE_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("AZURE_FALLBACK_ENDPOINT", "https://fallback.openai.azure.com")
+
+    assert llm.get_fallback_config() is None
+    assert llm.get_fallback_status()["configured"] is False
+
+
+def test_fallback_config_requires_key_and_endpoint(monkeypatch):
+    _enable_fallback(monkeypatch)
+    monkeypatch.delenv("AZURE_FALLBACK_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_FALLBACK_ENDPOINT", "https://fallback.openai.azure.com")
+
+    assert llm.get_fallback_config() is None
+
+    monkeypatch.setenv("AZURE_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.delenv("AZURE_FALLBACK_ENDPOINT", raising=False)
+
+    assert llm.get_fallback_config() is None
+
+
+def test_fallback_status_hides_credentials(monkeypatch):
+    _enable_fallback(monkeypatch)
+    monkeypatch.setenv("AZURE_FALLBACK_API_KEY", "super-secret-key")
+    monkeypatch.setenv("AZURE_FALLBACK_ENDPOINT", "https://fallback.openai.azure.com")
+    monkeypatch.setenv("AZURE_FALLBACK_MODEL", "fallback-model")
+
+    status = llm.get_fallback_status()
+
+    assert status == {
+        "enabled": True,
+        "configured": True,
+        "provider": "azure",
+        "model": "fallback-model",
+        "summary_model": "fallback-model",
+        "translation_model": "fallback-model",
+    }
+    assert "super-secret-key" not in json.dumps(status)
+
+
+@pytest.mark.asyncio
+async def test_chat_uses_fallback_after_primary_failure(monkeypatch):
+    _enable_fallback(monkeypatch)
+    monkeypatch.setenv("AZURE_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("AZURE_FALLBACK_ENDPOINT", "https://fallback.openai.azure.com")
+    monkeypatch.setenv("AZURE_FALLBACK_TRANSLATION_MODEL", "fallback-translation")
+
+    calls = {"primary": 0, "fallback": []}
+
+    async def failing_primary(prompt, system, provider, model):
+        calls["primary"] += 1
+        raise RuntimeError("401 invalid subscription key")
+
+    async def working_fallback(prompt, system, fallback, task=None):
+        calls["fallback"].append(fallback.model_for(task))
+        return "fallback answer"
+
+    monkeypatch.setattr(llm, "_call_provider", failing_primary)
+    monkeypatch.setattr(llm, "_call_fallback", working_fallback)
+
+    text = await llm._chat("hello", system="sys", task="translation")
+
+    assert text == "fallback answer"
+    assert calls["primary"] == 1
+    assert calls["fallback"] == ["fallback-translation"]
+
+
+@pytest.mark.asyncio
+async def test_chat_reports_both_failures(monkeypatch):
+    _enable_fallback(monkeypatch)
+    monkeypatch.setenv("AZURE_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("AZURE_FALLBACK_ENDPOINT", "https://fallback.openai.azure.com")
+    monkeypatch.setenv("AZURE_FALLBACK_MODEL", "fallback-model")
+
+    async def failing_primary(prompt, system, provider, model):
+        raise RuntimeError("primary exploded")
+
+    async def failing_fallback(prompt, system, fallback, task=None):
+        raise RuntimeError("fallback exploded")
+
+    monkeypatch.setattr(llm, "_call_provider", failing_primary)
+    monkeypatch.setattr(llm, "_call_fallback", failing_fallback)
+
+    with pytest.raises(llm.LLMServiceError) as excinfo:
+        await llm._chat("hello")
+
+    message = str(excinfo.value)
+    assert "primary exploded" in message
+    assert "Fallback azure" in message
+    assert "fallback exploded" in message
+
+
+@pytest.mark.asyncio
+async def test_chat_does_not_fall_back_when_disabled(monkeypatch):
+    monkeypatch.setattr(llm, "LLM_FALLBACK_ENABLED", False)
+    monkeypatch.setenv("AZURE_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("AZURE_FALLBACK_ENDPOINT", "https://fallback.openai.azure.com")
+
+    async def failing_primary(prompt, system, provider, model):
+        raise RuntimeError("primary exploded")
+
+    async def unexpected_fallback(prompt, system, fallback, task=None):
+        raise AssertionError("fallback must not run when disabled")
+
+    monkeypatch.setattr(llm, "_call_provider", failing_primary)
+    monkeypatch.setattr(llm, "_call_fallback", unexpected_fallback)
+
+    with pytest.raises(llm.LLMServiceError) as excinfo:
+        await llm._chat("hello")
+
+    assert "primary exploded" in str(excinfo.value)

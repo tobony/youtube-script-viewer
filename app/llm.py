@@ -57,6 +57,12 @@ CODEX_MODEL = os.getenv("CODEX_MODEL", "gpt-5.6-terra")
 CODEX_SUMMARY_MODEL = os.getenv("CODEX_SUMMARY_MODEL", "gpt-5.6-terra")
 CODEX_TRANSLATION_MODEL = os.getenv("CODEX_TRANSLATION_MODEL", "gpt-5.6-luna")
 
+# Fallback provider, used once when the primary provider call fails.
+# Every provider accepts <PREFIX>_FALLBACK_* twins of its own settings
+# (AZURE_FALLBACK_API_KEY, AZURE_FALLBACK_ENDPOINT, AZURE_FALLBACK_MODEL, ...).
+LLM_FALLBACK_ENABLED = os.getenv("LLM_FALLBACK_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+LLM_FALLBACK_PROVIDER = os.getenv("LLM_FALLBACK_PROVIDER", "").strip()
+
 
 @dataclass(frozen=True)
 class ProviderProfile:
@@ -86,8 +92,97 @@ PROVIDER_PROFILES = {
 PROVIDERS = {name: profile.display_name for name, profile in PROVIDER_PROFILES.items()}
 
 
+def _fallback_env_name(attr: str) -> str:
+    """Map a provider setting to its fallback twin: AZURE_API_KEY -> AZURE_FALLBACK_API_KEY."""
+    head, _, tail = attr.partition("_")
+    return f"{head}_FALLBACK_{tail}"
+
+
+@dataclass(frozen=True)
+class FallbackProfile:
+    """Resolved fallback target, built from the primary provider's *_FALLBACK_* env twins."""
+
+    provider: str
+    api_style: str
+    api_key: str
+    base_url: str
+    azure_endpoint: bool
+    model: str
+    summary_model: str
+    translation_model: str
+
+    def model_for(self, task: str | None = None) -> str:
+        if task == "summary" and self.summary_model:
+            return self.summary_model
+        if task == "translation" and self.translation_model:
+            return self.translation_model
+        return self.model or self.summary_model or self.translation_model
+
+
+def get_fallback_config() -> FallbackProfile | None:
+    """Return the configured fallback provider, or None when disabled or incomplete."""
+    if not LLM_FALLBACK_ENABLED:
+        return None
+    provider = LLM_FALLBACK_PROVIDER or LLM_PROVIDER
+    profile = PROVIDER_PROFILES.get(provider)
+    if profile is None or profile.api_style == "codex_app_server":
+        return None
+
+    def read(attr: str | None) -> str:
+        if not attr:
+            return ""
+        return (os.getenv(_fallback_env_name(attr), "") or "").strip()
+
+    api_key = read(profile.api_key_attr)
+    base_url = read(profile.base_url_attr)
+    model = read(profile.model_attr)
+    summary_model = read(profile.summary_model_attr) or model
+    translation_model = read(profile.translation_model_attr) or model
+    if profile.auth_type == "api_key" and not api_key:
+        return None
+    if profile.base_url_attr and not base_url:
+        return None
+    if not (model or summary_model or translation_model):
+        return None
+    return FallbackProfile(
+        provider=provider,
+        api_style=profile.api_style,
+        api_key=api_key,
+        base_url=base_url,
+        azure_endpoint=profile.azure_endpoint,
+        model=model,
+        summary_model=summary_model,
+        translation_model=translation_model,
+    )
+
+
+def get_fallback_status() -> dict[str, Any]:
+    """Describe the fallback target without exposing its credentials."""
+    fallback = get_fallback_config()
+    if fallback is None:
+        return {"enabled": bool(LLM_FALLBACK_ENABLED), "configured": False}
+    return {
+        "enabled": True,
+        "configured": True,
+        "provider": fallback.provider,
+        "model": fallback.model,
+        "summary_model": fallback.model_for("summary"),
+        "translation_model": fallback.model_for("translation"),
+    }
+
+
 class LLMServiceError(RuntimeError):
     """User-facing LLM failure with configuration hints."""
+
+
+def _build_client(api_key: str, base_url: str, azure_endpoint: bool, http_client: Any = None) -> AsyncOpenAI:
+    kwargs: dict[str, Any] = {
+        "api_key": api_key,
+        "http_client": http_client,
+    }
+    if base_url:
+        kwargs["base_url"] = _normalize_azure_base_url(base_url) if azure_endpoint else _normalize_base_url(base_url)
+    return AsyncOpenAI(**kwargs)
 
 
 def _get_client(provider: str | None = None, model: str | None = None, http_client: Any = None):
@@ -95,14 +190,14 @@ def _get_client(provider: str | None = None, model: str | None = None, http_clie
     profile = get_provider_profile(provider)
     if profile.api_style == "codex_app_server":
         raise ValueError("Codex subscription uses the app-server adapter, not AsyncOpenAI")
-    kwargs: dict[str, Any] = {
-        "api_key": globals().get(profile.api_key_attr or "", ""),
-        "http_client": http_client,
-    }
-    if profile.base_url_attr:
-        base_url = str(globals().get(profile.base_url_attr, ""))
-        kwargs["base_url"] = _normalize_azure_base_url(base_url) if profile.azure_endpoint else _normalize_base_url(base_url)
-    return AsyncOpenAI(**kwargs), model or get_model(provider), profile.api_style
+    base_url = str(globals().get(profile.base_url_attr, "")) if profile.base_url_attr else ""
+    client = _build_client(
+        api_key=str(globals().get(profile.api_key_attr or "", "")),
+        base_url=base_url,
+        azure_endpoint=profile.azure_endpoint,
+        http_client=http_client,
+    )
+    return client, model or get_model(provider), profile.api_style
 
 
 def _normalize_azure_base_url(endpoint: str) -> str:
@@ -241,25 +336,59 @@ async def list_available_models(provider: str | None = None) -> list[dict[str, A
     return await get_codex_client().list_models()
 
 
+async def _call_provider(prompt: str, system: str, provider: str, model: str) -> str:
+    if get_provider_profile(provider).api_style == "codex_app_server":
+        from app.codex_provider import get_codex_client
+
+        return await get_codex_client().run_prompt(prompt, system=system, model=model)
+    client, resolved_model, api_style = _get_client(provider=provider, model=model)
+    if api_style == "responses":
+        return await _call_responses(client, resolved_model, prompt, system)
+    return await _call_chat_completions(client, resolved_model, prompt, system)
+
+
+async def _call_fallback(prompt: str, system: str, fallback: FallbackProfile, task: str | None = None) -> str:
+    model = fallback.model_for(task)
+    client = _build_client(fallback.api_key, fallback.base_url, fallback.azure_endpoint)
+    if fallback.api_style == "responses":
+        return await _call_responses(client, model, prompt, system)
+    return await _call_chat_completions(client, model, prompt, system)
+
+
 async def _chat(
     prompt: str,
     system: str = "",
     provider: str | None = None,
     model: str | None = None,
+    task: str | None = None,
 ) -> str:
-    provider = provider or LLM_PROVIDER
-    resolved_model = model or get_model(provider)
-    try:
-        if get_provider_profile(provider).api_style == "codex_app_server":
-            from app.codex_provider import get_codex_client
+    """Send one prompt, retrying once on the configured fallback provider.
 
-            return await get_codex_client().run_prompt(prompt, system=system, model=resolved_model)
-        client, resolved_model, api_style = _get_client(provider=provider, model=resolved_model)
-        if api_style == "responses":
-            return await _call_responses(client, resolved_model, prompt, system)
-        return await _call_chat_completions(client, resolved_model, prompt, system)
-    except Exception as e:
-        raise LLMServiceError(_format_llm_error(e, provider=provider, model=resolved_model)) from e
+    The fallback is a separate provider target (usually the same provider pointed at
+    another resource with its own key and deployments). It is engaged for any primary
+    failure so a dead endpoint, revoked key, or missing deployment cannot stop a job.
+    """
+    provider = provider or LLM_PROVIDER
+    resolved_model = model or get_task_model(provider, task) if task else (model or get_model(provider))
+    try:
+        return await _call_provider(prompt, system, provider, resolved_model)
+    except Exception as primary_error:
+        fallback = get_fallback_config()
+        if fallback is None:
+            raise LLMServiceError(_format_llm_error(primary_error, provider=provider, model=resolved_model)) from primary_error
+        fallback_model = fallback.model_for(task)
+        logger.warning(
+            "Primary LLM failed (provider=%s model=%s): %s -- retrying with fallback provider=%s model=%s",
+            provider, resolved_model, primary_error, fallback.provider, fallback_model,
+        )
+        try:
+            text = await _call_fallback(prompt, system, fallback, task)
+        except Exception as fallback_error:
+            message = _format_llm_error(primary_error, provider=provider, model=resolved_model)
+            message += f" Fallback {fallback.provider} ({fallback_model}) also failed: {fallback_error}"
+            raise LLMServiceError(message) from fallback_error
+        logger.info("Fallback LLM answered (provider=%s model=%s)", fallback.provider, fallback_model)
+        return text
 
 
 async def _call_responses(client: AsyncOpenAI, model: str, prompt: str, system: str = "") -> str:
@@ -357,7 +486,7 @@ async def translate_paragraphs(
     ko_paragraphs = list(existing_ko) if existing_ko else []
     for para in paragraphs[skip_count:]:
         try:
-            ko_text = await _chat(para["text"], system=system, provider=provider, model=model)
+            ko_text = await _chat(para["text"], system=system, provider=provider, model=model, task="translation")
             ko_paragraphs.append({"start": para["start"], "text": ko_text})
         except LLMServiceError as e:
             logger.warning("Translation failed: %s", e)
@@ -398,7 +527,7 @@ async def summarize(transcript_json: str, provider: str | None = None, model: st
     )
 
     try:
-        result = await _chat(prompt, provider=provider, model=model)
+        result = await _chat(prompt, provider=provider, model=model, task="summary")
     except LLMServiceError as e:
         logger.warning("Summarize failed: %s", e)
         raise

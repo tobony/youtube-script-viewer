@@ -67,6 +67,29 @@ visual verification was not performed.
 - Every provider has independent summary and translation models.
 - Azure configuration includes API key, endpoint, region, and deployment/model.
 - Snapshot provider and task-model settings when a job starts.
+
+### Azure profiles
+
+- The default provider resource is the production Azure OpenAI resource in the
+  operator's own subscription. Use the local test resource only when a change
+  must be exercised without touching production.
+- Profiles live outside the repository, next to the compose file, as
+  `.env.azure-primary` and `.env.azure-test`. The active profile is copied to
+  `.env`; switch with `./azure-profile.sh status|primary|test`.
+- Never commit real resource hosts, keys, or subscription IDs. Docs, examples,
+  tests, and commit messages use placeholders such as `<resource-host>` and
+  `<api-key>` only.
+
+### LLM fallback
+
+- `LLM_FALLBACK_ENABLED=1` enables one retry on a fallback target when a provider
+  call fails (revoked key, dead endpoint, missing deployment, timeout).
+- The fallback reuses the primary provider's settings with a `_FALLBACK_` infix:
+  `AZURE_API_KEY` -> `AZURE_FALLBACK_API_KEY`, `AZURE_ENDPOINT` ->
+  `AZURE_FALLBACK_ENDPOINT`, `AZURE_TRANSLATION_MODEL` ->
+  `AZURE_FALLBACK_TRANSLATION_MODEL`. Incomplete fallback settings disable the retry.
+- Everything that calls `_chat` (summary, translation) is covered; the failure
+  message names both the primary error and the fallback error.
 - Do not translate Korean source transcripts; show `- BLANK -` in the translation pane.
 
 ## Definition of done
